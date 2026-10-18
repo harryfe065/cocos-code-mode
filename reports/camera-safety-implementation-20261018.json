@@ -1,0 +1,15 @@
+{
+  "date":"2026-10-18",
+  "status":"implemented-needs-verification",
+  "scope":"cameraSetProperties input and rollback safety",
+  "changes":[
+    "Pin node reference and deep-cloned JSON-serializable requested properties before asynchronous scene IPC",
+    "Use pinned values for all dispatch/readback/rollback comparisons",
+    "Preserve CAMERA_RESTORATION_CONFLICT instead of collapsing it into generic rollback failure",
+    "Require explicit rollback set-property acknowledgement and exact post-rollback field readback"
+  ],
+  "snapshotContinuation": { "status": "implemented-needs-verification", "changes": ["Refuse top-level requested fields lost during JSON snapshot before scene IPC", "Deep-copy native original values for restoration instead of retaining mutable response references", "Refuse unavailable or unsnapshotable original field before its write"], "requiredVerification": ["Undefined/function field refuses before IPC", "Mutable native object cannot change retained original", "Unavailable original field with prior partial writes", "Existing camera scalar/object behavior"] },
+  "verification":[],
+  "required":["source parse/typecheck","external camera edit conflict","nested/non-serializable input refusal","lost dispatch response","rollback acknowledgement refusal","native camera fixture persistence"],
+  "qualification":false
+}

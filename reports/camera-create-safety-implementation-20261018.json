@@ -1,0 +1,17 @@
+{
+  "date":"2026-10-18",
+  "status":"implemented-needs-verification",
+  "scope":"cameraCreate identity/projection/cleanup safety",
+  "changes":[
+    "Pin requested is2D before asynchronous scene operations",
+    "Require exact created node identity and exactly one camera component before configuration",
+    "Resolve projection component index by authoritative camera UUID, not object identity",
+    "Require exact post-snapshot node/camera identity and requested projection readback",
+    "Require remove-node acknowledgement and preserve retrySafe:false/restored:null when cleanup remains ambiguous"
+  ],
+  "pendingMutationContinuation": { "status": "implemented-needs-verification", "change": "Track create-component/projection/snapshot dispatch settlement; lost response returns CAMERA_CREATE_OUTCOME_UNKNOWN with retained node/component identity, pending phase, cleanupAttempted:false and retrySafe:false. No node deletion races an uncertain native request.", "requiredVerification": ["Lost create-component response zero cleanup", "Lost projection response retains camera UUID and zero cleanup", "Lost snapshot response zero cleanup", "Settled snapshot refusal enters existing cleanup path"] },
+  "cleanupContinuation": { "status": "implemented-needs-verification", "change": "Separate remove dispatch, authoritative absence readback and undo snapshot. Lost cleanup mutation response stops subsequent dispatch and reports CAMERA_CLEANUP_OUTCOME_UNKNOWN; confirmed node absence remains removed:true even if snapshot fails.", "requiredVerification": ["Lost remove response sends no snapshot", "Node remains after acknowledged removal", "Confirmed absence then lost/refused snapshot", "Clean absence and snapshot preserve original creation failure"] },
+  "verification":[],
+  "required":["source parse/typecheck","native create/readback with both projection modes","duplicate camera refusal","remove refusal/cleanup ambiguity","scene persistence and concurrent target changes"],
+  "qualification":false
+}

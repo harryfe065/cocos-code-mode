@@ -1,0 +1,22 @@
+{
+  "date":"2026-10-18",
+  "status":"implemented-needs-verification",
+  "scope":["cameraSetProperties","cameraCreate"],
+  "implemented":[
+    "Pinned JSON-safe request identity and values before IPC",
+    "External-edit conflict refusal during rollback",
+    "Rollback acknowledgement and exact readback",
+    "Exact camera/node cardinality and UUID identity on create",
+    "Projection index by camera UUID and post-snapshot projection verification",
+    "Acknowledged owned-node cleanup with ambiguous cleanup outcome"
+  ],
+  "rollbackContinuation": { "status": "implemented-needs-verification", "changes": ["Stop restoration immediately when native restore response is lost; CAMERA_RESTORATION_OUTCOME_UNKNOWN retains exact pending field/retrySafe:false/restored:null", "Refuse camera create/set success after explicit snapshot:false", "Validate direct create is2D/name and bounded setter reference before mutation"], "requiredVerification": ["Lost restore response prevents all subsequent restores", "Settled restore refusal/readback mismatch", "Snapshot refusal cleanup/restoration", "Invalid direct inputs dispatch no mutation"] },
+  "completePreflightContinuation": { "status": "implemented-needs-verification", "changes": ["Snapshot every requested original field before first write; unavailable later field refuses whole request before mutation", "Recheck each field against preflight original immediately before dispatch", "Track update snapshot as pending mutation; lost snapshot response forbids racing restoration"], "requiredVerification": ["Unavailable later field zero writes", "External field edit between preflight and dispatch", "Cross-field native setter side effects", "Lost snapshot response zero restoration", "Existing success and settled refusal restoration"] },
+  "errorContractContinuation": { "status": "implemented-needs-verification", "changes": ["Preserve original refusal/query failure when no property write was dispatched; do not claim restoration", "Unknown native response retains pendingPhase property/snapshot and exact pendingProperty when applicable"], "requiredVerification": ["First pre-write drift preserves CAMERA_TARGET_CHANGED and zero restore", "Predispatch query failure preserves original error", "Lost property response retains field", "Lost snapshot response records snapshot phase and null field"] },
+  "finalRestorationObservation": { "status": "implemented-needs-verification", "change": "After settled per-field restoration, observe exact camera identity/index and all attempted original values together; later setter side effects or unavailable final inventory cannot grant restoration success. No corrective write retries are added.", "requiredVerification": ["Later restore changes earlier restored field", "Final camera identity drift", "Final query failure", "Stable full restoration"] },
+  "verification":[],
+  "required":["native camera fixture","scene persistence/reopen","concurrent scene mutation","lost IPC response","cleanup refusal","full traversal and duplicate identity cases"],
+  "remainingSourceGaps":"None in the currently mapped low-risk queue; graph serializer, localization restart, preview setter and native persistence remain contract/qualification blockers.",
+  "qualification":false,
+  "promotion":false
+}

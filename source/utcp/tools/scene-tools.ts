@@ -357,39 +357,60 @@ export class SceneTools {
         'POST', ['scene', 'camera', 'create', 'node']
     )
     async cameraCreate(args: { name?: string, is2D?: boolean, parentReference?: IInstanceReference }): Promise<{ nodeReference: IInstanceReference, cameraReference: IInstanceReference }> {
+        if (!args || args.is2D !== undefined && typeof args.is2D !== 'boolean' || args.name !== undefined && (typeof args.name !== 'string' || !args.name.length)) throw new ToolError({ code: 'INVALID_ARGUMENT', status: 400, message: 'Camera creation requires optional nonempty name and boolean is2D.' });
+        const requestedIs2D = args.is2D;
         const nodeReference = await this.sceneCreateNode({ name: args.name ?? 'Camera', parentReference: args.parentReference });
+        let pendingMutation: 'create-component' | 'projection' | 'snapshot' | null = null;
+        let createdCameraId: string | null = null;
         try {
+            pendingMutation = 'create-component';
             await Editor.Message.request('scene', 'create-component', { uuid: nodeReference.reference.id, component: 'cc.Camera' });
+            pendingMutation = null;
             const node = await Editor.Message.request('scene', 'query-node', nodeReference.reference.id);
-            const camera = cameraComponentsFromNode(node).find((component) => isCameraComponent(component));
-            if (!camera) throw new ToolError({ code: 'CAMERA_CREATE_UNCONFIRMED', status: 502, message: 'Creator did not confirm cc.Camera creation.' });
-            const cameraReferenceValue = cameraReference(camera);
-            if (args.is2D !== undefined) {
-                const cameraIndex = cameraComponentsFromNode(node).findIndex((component) => component === camera);
-                const projectionPath = `__comps__.${cameraIndex}.projection`;
-                const projection = args.is2D ? 1 : 0;
-                const changed = await Editor.Message.request('scene', 'set-property', { uuid: nodeReference.reference.id, path: projectionPath, dump: { value: projection, type: 'Enum' } });
+            if (!node || typeof node !== 'object' || unwrapSceneValue((node as Record<string, unknown>).uuid) !== nodeReference.reference.id) throw new ToolError({ code: 'CAMERA_CREATE_UNCONFIRMED', status: 502, message: 'Creator did not confirm the created node identity.' });
+            const initialCameras = cameraComponentsFromNode(node).filter((component) => isCameraComponent(component));
+            if (initialCameras.length !== 1) throw new ToolError({ code: 'CAMERA_CREATE_UNCONFIRMED', status: 502, message: 'Creator did not confirm exactly one cc.Camera after creation.' });
+            const cameraReferenceValue = cameraReference(initialCameras[0]);
+            createdCameraId = cameraReferenceValue.id;
+            if (requestedIs2D !== undefined) {
+                const cameraIndex = cameraComponentsFromNode(node).findIndex((component) => componentUuid(component) === cameraReferenceValue.id);
+                if (cameraIndex < 0) throw new ToolError({ code: 'CAMERA_CREATE_UNCONFIRMED', status: 502, message: 'Created camera index was not confirmed.' });
+                pendingMutation = 'projection';
+                const changed = await Editor.Message.request('scene', 'set-property', { uuid: nodeReference.reference.id, path: `__comps__.${cameraIndex}.projection`, dump: { value: requestedIs2D ? 1 : 0, type: 'Enum' } });
+                pendingMutation = null;
                 if (changed === false) throw new ToolError({ code: 'CAMERA_CREATE_UNCONFIRMED', status: 502, message: 'Creator rejected the requested camera projection.' });
             }
-            await Editor.Message.request('scene', 'snapshot');
+            pendingMutation = 'snapshot';
+            const snapshot: unknown = await Editor.Message.request('scene', 'snapshot');
+            pendingMutation = null;
+            if (snapshot === false) throw new ToolError({ code: 'CAMERA_CREATE_UNCONFIRMED', status: 502, message: 'Creator refused the camera creation undo snapshot.' });
             const verifiedNode = await Editor.Message.request('scene', 'query-node', nodeReference.reference.id);
-            const verifiedCamera = cameraComponentsFromNode(verifiedNode).find((component) => isCameraComponent(component));
-            if (!verifiedCamera || cameraReference(verifiedCamera).id !== cameraReferenceValue.id) throw new ToolError({ code: 'CAMERA_CREATE_UNCONFIRMED', status: 502, message: 'Creator did not confirm camera read-back.' });
-            if (args.is2D !== undefined && cameraComponentField(verifiedCamera, 'projection') !== (args.is2D ? 1 : 0)) {
-                throw new ToolError({ code: 'CAMERA_CREATE_UNCONFIRMED', status: 502, message: 'Creator did not retain the requested camera projection.' });
-            }
+            if (!verifiedNode || typeof verifiedNode !== 'object' || unwrapSceneValue((verifiedNode as Record<string, unknown>).uuid) !== nodeReference.reference.id) throw new ToolError({ code: 'CAMERA_CREATE_UNCONFIRMED', status: 502, message: 'Creator did not confirm created node read-back.' });
+            const verifiedCameras = cameraComponentsFromNode(verifiedNode).filter((component) => isCameraComponent(component));
+            if (verifiedCameras.length !== 1 || cameraReference(verifiedCameras[0]).id !== cameraReferenceValue.id) throw new ToolError({ code: 'CAMERA_CREATE_UNCONFIRMED', status: 502, message: 'Creator did not preserve camera identity.' });
+            if (requestedIs2D !== undefined && cameraComponentField(verifiedCameras[0], 'projection') !== (requestedIs2D ? 1 : 0)) throw new ToolError({ code: 'CAMERA_CREATE_UNCONFIRMED', status: 502, message: 'Creator did not retain the requested camera projection.' });
             return { nodeReference: nodeReference.reference, cameraReference: cameraReferenceValue };
         } catch (error) {
-            let cleanupCause: string | undefined;
+            if (pendingMutation) throw new ToolError({ code: 'CAMERA_CREATE_OUTCOME_UNKNOWN', status: 502, message: 'Camera creation/configuration was dispatched but its outcome is unknown; node cleanup was not dispatched.', details: { nodeReference: nodeReference.reference, componentId: createdCameraId, pendingMutation, retrySafe: false, restored: null, cleanupAttempted: false, cause: error instanceof Error ? error.message : String(error) }, recovery: 'Inspect the retained node and reconcile the pending native request before creation or cleanup.' });
+            let cleanupPhase: 'remove' | 'absence-readback' | 'snapshot' = 'remove';
+            let cleanupPending = false;
+            let removed = false;
             try {
-                await Editor.Message.request('scene', 'remove-node', { uuid: nodeReference.reference.id });
-                await Editor.Message.request('scene', 'snapshot');
-            } catch (cleanupError) { cleanupCause = cleanupError instanceof Error ? cleanupError.message : String(cleanupError); }
-            try {
+                cleanupPending = true;
+                const removeResult = await Editor.Message.request('scene', 'remove-node', { uuid: nodeReference.reference.id });
+                cleanupPending = false;
+                if (removeResult === false) throw new Error('Creator refused camera node removal.');
+                cleanupPhase = 'absence-readback';
                 const remaining = await Editor.Message.request('scene', 'query-node', nodeReference.reference.id);
                 if (remaining !== null && remaining !== undefined) throw new Error('Created camera node remains or cleanup response is invalid.');
+                removed = true;
+                cleanupPhase = 'snapshot';
+                cleanupPending = true;
+                const cleanupSnapshot: unknown = await Editor.Message.request('scene', 'snapshot');
+                cleanupPending = false;
+                if (cleanupSnapshot === false) throw new Error('Creator refused the camera cleanup undo snapshot.');
             } catch (cleanupError) {
-                throw new ToolError({ code: 'ROLLBACK_FAILED', status: 500, message: 'Camera creation failed and owned-node cleanup could not be verified.', details: { nodeUuid: nodeReference.reference.id, cause: error instanceof Error ? error.message : String(error), cleanupCause: cleanupCause ?? (cleanupError instanceof Error ? cleanupError.message : String(cleanupError)) } });
+                throw new ToolError({ code: cleanupPending ? 'CAMERA_CLEANUP_OUTCOME_UNKNOWN' : 'ROLLBACK_FAILED', status: cleanupPending ? 502 : 500, message: removed ? 'Camera node absence was confirmed, but cleanup snapshot was not confirmed.' : 'Camera creation failed and owned-node cleanup was not confirmed.', details: { nodeUuid: nodeReference.reference.id, componentId: createdCameraId, cleanupPhase, removed, snapshotConfirmed: false, pendingMayComplete: cleanupPending, cause: error instanceof Error ? error.message : String(error), cleanupCause: cleanupError instanceof Error ? cleanupError.message : String(cleanupError), retrySafe: false, restored: removed ? true : null }, recovery: removed ? 'Reconcile undo state; do not repeat node removal.' : 'Inspect the exact node and any pending cleanup request before another mutation.' });
             }
             throw error;
         }
@@ -456,13 +477,23 @@ export class SceneTools {
         'POST', ['scene', 'camera', 'set', 'properties']
     )
     async cameraSetProperties(args: { reference: IInstanceReference, properties: Record<string, unknown> }): Promise<{ updated: true, reference: IInstanceReference }> {
-        if (!args.reference?.id || !args.properties || typeof args.properties !== 'object' || Array.isArray(args.properties) || Object.keys(args.properties).length === 0) {
+        if (!args?.reference || typeof args.reference.id !== 'string' || !args.reference.id.trim() || args.reference.id.length > 256 || !args.properties || typeof args.properties !== 'object' || Array.isArray(args.properties) || Object.keys(args.properties).length === 0) {
             throw new ToolError({ code: 'INVALID_ARGUMENT', status: 400, message: 'cameraSetProperties requires a camera reference and non-empty properties.' });
         }
         const propertyNames = Object.keys(args.properties);
         if (propertyNames.length > 32 || propertyNames.some((property) => !/^[A-Za-z_][A-Za-z0-9_]{0,127}$/.test(property))) {
             throw new ToolError({ code: 'INVALID_ARGUMENT', status: 400, message: 'Camera properties require 1 to 32 bounded identifier names, not nested paths.' });
         }
+        const nodeReferenceId = args.reference.id;
+        let requestedProperties: Record<string, unknown>;
+        try { requestedProperties = JSON.parse(JSON.stringify(args.properties)) as Record<string, unknown>; }
+        catch { throw new ToolError({ code: 'INVALID_ARGUMENT', status: 400, message: 'Camera properties must be JSON-serializable.' }); }
+        if (!requestedProperties || typeof requestedProperties !== 'object' || Array.isArray(requestedProperties)
+            || Object.keys(requestedProperties).length !== propertyNames.length
+            || propertyNames.some(property => !Object.prototype.hasOwnProperty.call(requestedProperties, property))) {
+            throw new ToolError({ code: 'INVALID_ARGUMENT', status: 400, message: 'Every requested camera property must survive JSON serialization before mutation.' });
+        }
+        args = { reference: { id: nodeReferenceId, ...(args.reference.type === undefined ? {} : { type: args.reference.type }) }, properties: requestedProperties };
         const nodeTree = await Editor.Message.request('scene', 'query-node-tree');
         if (!nodeTree) throw new ToolError({ code: 'TARGET_NOT_FOUND', status: 404, message: 'No open scene hierarchy.' });
         let foundNode: Record<string, unknown> | undefined;
@@ -502,52 +533,85 @@ export class SceneTools {
         componentIndex = requireUniqueCamera(serializedComponents);
         if (componentIndex < 0) throw new ToolError({ code: 'TARGET_NOT_FOUND', status: 404, message: 'Camera is absent from the serialized node.' });
         const previous = new Map<string, unknown>();
+        for (const property of propertyNames) {
+            const original = cameraComponentField(serializedComponents[componentIndex], property);
+            if (original === undefined) throw new ToolError({ code: 'CAMERA_PROPERTY_UNAVAILABLE', status: 422, message: `Camera property ${property} has no restorable serialized value.` });
+            try { previous.set(property, JSON.parse(JSON.stringify(original))); }
+            catch { throw new ToolError({ code: 'CAMERA_PROPERTY_UNAVAILABLE', status: 422, message: `Camera property ${property} cannot be snapshotted for restoration.` }); }
+        }
         const applied: string[] = [];
         let mutationPending = false;
+        let pendingPhase: 'property' | 'snapshot' | null = null;
+        let pendingProperty: string | null = null;
         const restoreApplied = async (): Promise<string | null> => {
             const failures: string[] = [];
             for (let index = applied.length - 1; index >= 0; index--) {
                 const property = applied[index];
+                let restorationPending = false;
                 try {
                     const currentNode = await Editor.Message.request('scene', 'query-node', nodeId);
                     const components = checkedNodeComponents(currentNode);
                     if (requireUniqueCamera(components) !== componentIndex) throw new Error('Camera identity/index changed before restoration.');
                     const observed = cameraComponentField(components[componentIndex], property);
                     if (JSON.stringify(observed) === JSON.stringify(previous.get(property))) continue;
-                    if (JSON.stringify(observed) !== JSON.stringify(args.properties[property])) throw new Error('Camera value changed outside this update; restoration refused.');
-                    await Editor.Message.request('scene', 'set-property', { uuid: nodeId, path: `__comps__.${componentIndex}.${property}`, dump: { value: previous.get(property) as IPropertyValueType, type: typeof previous.get(property) === 'number' ? 'Number' : typeof previous.get(property) === 'boolean' ? 'Boolean' : 'String' } });
+                    if (JSON.stringify(observed) !== JSON.stringify(requestedProperties[property])) throw new ToolError({ code: 'CAMERA_RESTORATION_CONFLICT', status: 409, message: 'Camera value changed outside this update; restoration refused.', details: { nodeId, componentId: nodeReferenceId, property, retrySafe: false, restored: null } });
+                    restorationPending = true;
+                    const restoredResult = await Editor.Message.request('scene', 'set-property', { uuid: nodeId, path: `__comps__.${componentIndex}.${property}`, dump: { value: previous.get(property) as IPropertyValueType, type: typeof previous.get(property) === 'number' ? 'Number' : typeof previous.get(property) === 'boolean' ? 'Boolean' : 'String' } });
+                    restorationPending = false;
+                    if (restoredResult === false) throw new Error(`Creator refused rollback ${property}`);
                     const restoredNode = await Editor.Message.request('scene', 'query-node', nodeId);
                     const restoredComponents = checkedNodeComponents(restoredNode);
-                    const restoredIndex = requireUniqueCamera(restoredComponents);
-                    if (restoredIndex !== componentIndex) throw new Error('Camera identity/index changed after restoration.');
-                    if (JSON.stringify(cameraComponentField(restoredComponents[restoredIndex], property)) !== JSON.stringify(previous.get(property))) failures.push(property);
-                } catch { failures.push(property); }
+                    if (requireUniqueCamera(restoredComponents) !== componentIndex || JSON.stringify(cameraComponentField(restoredComponents[componentIndex], property)) !== JSON.stringify(previous.get(property))) throw new Error(`rollback read-back mismatch for ${property}`);
+                } catch (error) {
+                    if (restorationPending) throw new ToolError({ code: 'CAMERA_RESTORATION_OUTCOME_UNKNOWN', status: 502, message: 'Camera restoration was dispatched but did not return a settled outcome; further restoration was stopped.', details: { nodeId, componentId: nodeReferenceId, property, retrySafe: false, restored: null, cause: error instanceof Error ? error.message : String(error) }, recovery: 'Reconcile the exact camera field and pending restoration before any further mutation.' });
+                    if (error instanceof ToolError && error.code === 'CAMERA_RESTORATION_CONFLICT') throw error;
+                    failures.push(property);
+                }
+            }
+            try {
+                const finalNode = await Editor.Message.request('scene', 'query-node', nodeId);
+                const finalComponents = checkedNodeComponents(finalNode);
+                if (requireUniqueCamera(finalComponents) !== componentIndex) throw new Error('Camera identity/index changed during final restoration read-back.');
+                for (const property of applied) {
+                    if (JSON.stringify(cameraComponentField(finalComponents[componentIndex], property)) !== JSON.stringify(previous.get(property)) && !failures.includes(property)) failures.push(property);
+                }
+            } catch {
+                for (const property of applied) if (!failures.includes(property)) failures.push(property);
             }
             return failures.length ? failures.join(',') : null;
         };
         try {
-            for (const [property, value] of Object.entries(args.properties)) {
+            for (const [property, value] of Object.entries(requestedProperties)) {
                 const currentNode = await Editor.Message.request('scene', 'query-node', nodeId);
                 const currentComponents = checkedNodeComponents(currentNode);
                 if (requireUniqueCamera(currentComponents) !== componentIndex) throw new ToolError({ code: 'CAMERA_TARGET_CHANGED', status: 409, message: 'Camera serialized component index changed before property dispatch.' });
-                previous.set(property, cameraComponentField(currentComponents[componentIndex], property));
+                if (JSON.stringify(cameraComponentField(currentComponents[componentIndex], property)) !== JSON.stringify(previous.get(property))) throw new ToolError({ code: 'CAMERA_TARGET_CHANGED', status: 409, message: `Camera property ${property} changed after preflight; its write was refused.` });
                 applied.push(property);
-                const propertyValue = value as IPropertyValueType;
+                pendingPhase = 'property';
+                pendingProperty = property;
                 mutationPending = true;
-                const changed = await Editor.Message.request('scene', 'set-property', { uuid: nodeId, path: `__comps__.${componentIndex}.${property}`, dump: { value: propertyValue, type: typeof value === 'number' ? 'Number' : typeof value === 'boolean' ? 'Boolean' : 'String' } });
+                const changed = await Editor.Message.request('scene', 'set-property', { uuid: nodeId, path: `__comps__.${componentIndex}.${property}`, dump: { value: value as IPropertyValueType, type: typeof value === 'number' ? 'Number' : typeof value === 'boolean' ? 'Boolean' : 'String' } });
                 mutationPending = false;
+                pendingPhase = null;
+                pendingProperty = null;
                 if (changed === false) throw new ToolError({ code: 'CAMERA_PROPERTY_UPDATE_FAILED', status: 502, message: `Creator rejected camera property ${property}.` });
             }
-            await Editor.Message.request('scene', 'snapshot');
+            pendingPhase = 'snapshot';
+            mutationPending = true;
+            const snapshot: unknown = await Editor.Message.request('scene', 'snapshot');
+            mutationPending = false;
+            pendingPhase = null;
+            if (snapshot === false) throw new ToolError({ code: 'CAMERA_PROPERTY_UPDATE_UNCONFIRMED', status: 502, message: 'Creator refused the camera update undo snapshot.' });
             const verifiedNode = await Editor.Message.request('scene', 'query-node', nodeId);
             const verifiedComponents = checkedNodeComponents(verifiedNode);
             const verified = verifiedComponents[requireUniqueCamera(verifiedComponents)];
-            if (!verified || Object.entries(args.properties).some(([property, value]) => JSON.stringify(cameraComponentField(verified, property)) !== JSON.stringify(value))) throw new ToolError({ code: 'CAMERA_PROPERTY_UPDATE_UNCONFIRMED', status: 502, message: 'Camera property mutation was not confirmed by read-back.' });
+            if (!verified || Object.entries(requestedProperties).some(([property, value]) => JSON.stringify(cameraComponentField(verified, property)) !== JSON.stringify(value))) throw new ToolError({ code: 'CAMERA_PROPERTY_UPDATE_UNCONFIRMED', status: 502, message: 'Camera property mutation was not confirmed by read-back.' });
             return { updated: true, reference: cameraReference(verified) };
         } catch (error) {
-            if (mutationPending) throw new ToolError({ code: 'CAMERA_MUTATION_OUTCOME_UNKNOWN', status: 502, message: 'Camera property dispatch did not return a settled outcome; automatic restoration was not attempted.', details: { nodeId, componentId: args.reference.id, applied, retrySafe: false, restored: null }, recovery: 'Inspect the exact camera and reconcile the in-flight request before another mutation.' });
+            if (mutationPending) throw new ToolError({ code: 'CAMERA_MUTATION_OUTCOME_UNKNOWN', status: 502, message: 'Camera native dispatch did not return a settled outcome; automatic restoration was not attempted.', details: { nodeId, componentId: nodeReferenceId, pendingPhase, pendingProperty, applied, retrySafe: false, restored: null }, recovery: 'Inspect the exact camera and reconcile the pending phase before another mutation.' });
+            if (applied.length === 0) throw error;
             const rollbackFailure = await restoreApplied();
-            throw new ToolError({ code: rollbackFailure ? 'ROLLBACK_FAILED' : 'CAMERA_PROPERTY_UPDATE_FAILED', status: 502, message: rollbackFailure ? `Camera property update failed; rollback could not verify ${rollbackFailure}.` : 'Camera property update failed; owned camera values were restored.', details: { nodeId, componentId: args.reference.id, applied, rollbackFailure, cause: error instanceof Error ? error.message : String(error) }, recovery: rollbackFailure ? 'Inspect the camera before retrying; do not replay an ambiguous mutation.' : 'Retry only after fresh camera identity/read-back.' });
+            throw new ToolError({ code: rollbackFailure ? 'ROLLBACK_FAILED' : 'CAMERA_PROPERTY_UPDATE_FAILED', status: 502, message: rollbackFailure ? `Camera property update failed; rollback could not verify ${rollbackFailure}.` : 'Camera property update failed; owned camera values were restored.', details: { nodeId, componentId: nodeReferenceId, applied, rollbackFailure, cause: error instanceof Error ? error.message : String(error) }, recovery: rollbackFailure ? 'Inspect the camera before retrying; do not replay an ambiguous mutation.' : 'Retry only after fresh camera identity/read-back.' });
         }
     }
 

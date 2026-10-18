@@ -1,4 +1,4 @@
-import { createHash } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
 import packageJSON from '../../../package.json';
 import { utcpTool } from '../decorators';
 import { SuccessIndicatorSchema, ISuccessIndicator, InstanceReferenceSchema, IInstanceReference } from '../schemas';
@@ -337,28 +337,37 @@ export class ComponentTools {
     }
 
     async nodeComponentRemove(args: { reference: IInstanceReference }): Promise<ISuccessIndicator> {
-        if (!args.reference?.id) throw new Error('nodeComponentRemove requires reference.id');
+        if (!args?.reference || typeof args.reference.id !== 'string' || !args.reference.id.trim() || args.reference.id.length > 256) throw new ToolError({ code: 'INVALID_ARGUMENT', status: 400, message: 'nodeComponentRemove requires a bounded nonempty component reference.id.' });
+        const componentId = args.reference.id;
+        let mutationPending = false;
+        let removalConfirmed = false;
         try {
-            const component = await Editor.Message.request('scene', 'query-component', args.reference.id);
-            if (component === null || component === undefined) {
-                throw new Error(`Component ${args.reference.id} not found`);
-            }
-
-            await Editor.Message.request('scene', 'remove-component', { uuid: args.reference.id });
-            const remaining = await Editor.Message.request('scene', 'query-component', args.reference.id);
-            if (remaining !== null && remaining !== undefined) {
-                const remainingUuid = field(remaining, 'uuid') ?? field(field(remaining, 'value'), 'uuid');
-                throw new Error(`Component ${args.reference.id} still exists after removal (read-back ${String(remainingUuid ?? 'unknown')})`);
-            }
-            await Editor.Message.request('scene', 'snapshot');
+            const component = await Editor.Message.request('scene', 'query-component', componentId);
+            if (component === null || component === undefined) throw new Error(`Component ${componentId} not found`);
+            const beforeUuid = field(component, 'uuid') ?? field(field(component, 'value'), 'uuid');
+            const normalizedBefore = typeof beforeUuid === 'string' ? beforeUuid : field(beforeUuid, 'value');
+            if (normalizedBefore !== componentId) throw new ToolError({ code: 'COMPONENT_TARGET_CHANGED', status: 409, message: `Component ${componentId} identity could not be confirmed before removal.`, details: { retrySafe: false, restored: null } });
+            mutationPending = true;
+            const removed = await Editor.Message.request('scene', 'remove-component', { uuid: componentId });
+            mutationPending = false;
+            if (removed === false) throw new Error(`Creator refused removal of component ${componentId}`);
+            const remaining = await Editor.Message.request('scene', 'query-component', componentId);
+            if (remaining !== null && remaining !== undefined) throw new Error(`Component ${componentId} still exists after removal`);
+            removalConfirmed = true;
+            const snapshot: unknown = await Editor.Message.request('scene', 'snapshot');
+            if (snapshot === false) throw new Error('Creator refused the removal undo snapshot.');
             return { success: true };
         } catch (error: unknown) {
-            throw new Error(`Failed to remove component ${args.reference.id}. Reason: ${error instanceof Error ? error.message : String(error)}`);
+            if (mutationPending) throw new ToolError({ code: 'COMPONENT_REMOVE_OUTCOME_UNKNOWN', status: 502, message: `Component ${componentId} removal was dispatched but its outcome is unknown.`, details: { componentId, retrySafe: false, restored: null, cause: error instanceof Error ? error.message : String(error) }, recovery: 'Inspect the component inventory before another removal; do not replay automatically.' });
+            if (removalConfirmed) throw new ToolError({ code: 'COMPONENT_REMOVE_SNAPSHOT_UNCONFIRMED', status: 502, message: 'Component absence was confirmed but its undo snapshot was not confirmed.', details: { componentId, removed: true, snapshotConfirmed: false, retrySafe: false, cause: error instanceof Error ? error.message : String(error) }, recovery: 'Reconcile undo/snapshot state; do not repeat component removal.' });
+            if (error instanceof ToolError) throw error;
+            throw new ToolError({ code: 'COMPONENT_REMOVE_FAILED', status: 502, message: `Failed to remove component ${componentId}.`, details: { componentId, retrySafe: false, restored: null, cause: error instanceof Error ? error.message : String(error) }, recovery: 'Inspect the exact component identity before retrying.' });
         }
     }
 
     async nodeComponentAdd(args: { reference: IInstanceReference, componentType: string }): Promise<{ reference: IInstanceReference }> {
-        if (!args.reference?.id || typeof args.componentType !== 'string' || !/^[A-Za-z_][A-Za-z0-9_.]{0,127}$/.test(args.componentType)) throw new Error('nodeComponentAdd requires a bounded component class identifier.');
+        if (!args?.reference || typeof args.reference.id !== 'string' || !args.reference.id.trim() || args.reference.id.length > 256 || typeof args.componentType !== 'string' || !/^[A-Za-z_][A-Za-z0-9_.]{0,127}$/.test(args.componentType)) throw new ToolError({ code: 'INVALID_ARGUMENT', status: 400, message: 'nodeComponentAdd requires a bounded node reference and component class identifier.' });
+        args = { reference: { id: args.reference.id, ...(args.reference.type === undefined ? {} : { type: args.reference.type }) }, componentType: args.componentType };
         const node = await Editor.Message.request('scene', 'query-node', args.reference.id);
         if (!node) throw new Error(`Node ${args.reference.id} not found`);
         const checkedComponents = (dump: unknown): unknown[] => {
@@ -398,25 +407,46 @@ export class ComponentTools {
         };
         const existingUuids = new Set<string>(checkedComponents(node).map(componentUuid).filter((id): id is string => !!id));
 
-        await Editor.Message.request('scene', 'execute-scene-script', { name: packageJSON.name, method: 'startCatchLogging', args: [] });
         let caughtLogs: string[] = [];
+        let creationDispatched = false;
+        let captureAcknowledged = false;
+        const loggingOwner = randomUUID();
+        const loggingSetupDeadline = Date.now() + 10000;
         try {
+            const capture: unknown = await Editor.Message.request('scene', 'execute-scene-script', { name: packageJSON.name, method: 'startCatchLogging', args: [loggingOwner, loggingSetupDeadline] });
+            if (field(capture, 'owner') !== loggingOwner || field(capture, 'active') !== true || field(capture, 'expiresAt') !== loggingSetupDeadline) throw new Error('Scene logging collector did not acknowledge this operation owner/deadline; reload matching extension modules.');
+            captureAcknowledged = true;
+            if (Date.now() >= loggingSetupDeadline) throw new Error('Logging setup completed after its deadline; creation was not dispatched.');
             try {
+                creationDispatched = true;
                 await Editor.Message.request('scene', 'create-component', { uuid: args.reference.id, component: args.componentType });
             } catch (error) {
                 throw new ToolError({ code: 'COMPONENT_CREATE_OUTCOME_UNKNOWN', status: 502, message: 'Component creation dispatch failed; the mutation outcome must be reconciled.', details: { nodeId: args.reference.id, componentType: args.componentType, retrySafe: false, cause: error instanceof Error ? error.message : String(error) }, recovery: 'Inspect the exact node component inventory before another creation attempt; do not replay this mutation automatically.' });
             }
-            caughtLogs = await Editor.Message.request('scene', 'execute-scene-script', { name: packageJSON.name, method: 'stopCatchLogging', args: [] }) ?? [];
+            const logs: unknown = await Editor.Message.request('scene', 'execute-scene-script', { name: packageJSON.name, method: 'stopCatchLogging', args: [loggingOwner] });
+            if (!Array.isArray(logs) || logs.length > 128 || logs.some(log => typeof log !== 'string' || log.length > 2048)) throw new Error('Scene logging collector returned an invalid bounded log response.');
+            caughtLogs = logs;
         } catch (error) {
-            let cleanupFailed = false;
-            try { await Editor.Message.request('scene', 'execute-scene-script', { name: packageJSON.name, method: 'stopCatchLogging', args: [] }); }
-            catch { cleanupFailed = true; }
+            let cleanupFailed = true;
+            try {
+                const state: unknown = await Editor.Message.request('scene', 'execute-scene-script', { name: packageJSON.name, method: 'inspectCatchLogging', args: [loggingOwner] });
+                if (field(state, 'active') === true && field(state, 'owned') === true && field(state, 'handlerCurrent') === true) {
+                    await Editor.Message.request('scene', 'execute-scene-script', { name: packageJSON.name, method: 'stopCatchLogging', args: [loggingOwner] });
+                    const after: unknown = await Editor.Message.request('scene', 'execute-scene-script', { name: packageJSON.name, method: 'inspectCatchLogging', args: [loggingOwner] });
+                    cleanupFailed = field(after, 'active') !== false || field(after, 'owned') !== false || field(after, 'handlerCurrent') !== false;
+                } else if (captureAcknowledged && field(state, 'active') === false && field(state, 'owned') === false && field(state, 'handlerCurrent') === false) {
+                    cleanupFailed = false;
+                }
+            } catch { /* Unknown collector state never authorizes foreign cleanup or replay. */ }
             if (error instanceof ToolError && error.code === 'COMPONENT_CREATE_OUTCOME_UNKNOWN') {
                 throw new ToolError({ code: error.code, status: error.status, message: error.message, details: { ...error.details, loggingCleanupFailed: cleanupFailed }, recovery: error.recovery });
             }
+            if (!creationDispatched) throw new ToolError({ code: 'COMPONENT_LOGGING_SETUP_FAILED', status: 502, message: 'Component logging setup failed before creation; no component creation was dispatched.', details: { nodeId: args.reference.id, componentType: args.componentType, mutationDispatched: false, loggingCleanupFailed: cleanupFailed, retrySafe: !cleanupFailed, cause: error instanceof Error ? error.message : String(error) }, recovery: cleanupFailed ? 'Reconcile the logging collector before another operation.' : 'Inspect logging availability before retrying.' });
             throw new ToolError({ code: 'COMPONENT_CREATE_POSTCONDITION_UNKNOWN', status: 502, message: 'Component creation returned but logging completion failed; component state is unverified.', details: { nodeId: args.reference.id, componentType: args.componentType, retrySafe: false, loggingCleanupFailed: cleanupFailed }, recovery: 'Inspect the node component inventory before retrying; the component may already exist.' });
         }
 
+        let acknowledgedComponentId: string | null = null;
+        try {
         const nodeAfter = await Editor.Message.request('scene', 'query-node', args.reference.id);
         if (!nodeAfter) throw new Error(`nodeComponentAdd: node ${args.reference.id} disappeared after create-component`);
         const newComponents = checkedComponents(nodeAfter).filter((component: unknown) => {
@@ -426,13 +456,18 @@ export class ComponentTools {
         if (newComponents.length > 1) throw new ToolError({ code: 'COMPONENT_CREATE_AMBIGUOUS', status: 409, message: 'Multiple new components match the requested class; creation identity is ambiguous.', details: { nodeId: args.reference.id, componentType: args.componentType, retrySafe: false }, recovery: 'Inspect the exact node inventory; do not retry creation or remove unowned components automatically.' });
         const newComponent = newComponents[0];
         const newId = componentUuid(newComponent);
-        if (!newId) throw new Error(`Failed to add component. Captured logs: ${caughtLogs.join('\n')}`);
+        acknowledgedComponentId = newId ?? null;
+        if (!newId) throw new ToolError({ code: 'COMPONENT_CREATE_POSTCONDITION_UNKNOWN', status: 502, message: 'Creation returned without a uniquely observed new component.', details: { nodeId: args.reference.id, componentType: args.componentType, retrySafe: false, logs: caughtLogs }, recovery: 'Inspect the node inventory; do not repeat creation automatically.' });
 
-        await Editor.Message.request('scene', 'snapshot');
+        const snapshot: unknown = await Editor.Message.request('scene', 'snapshot');
+        if (snapshot === false) throw new ToolError({ code: 'COMPONENT_CREATE_SNAPSHOT_UNCONFIRMED', status: 502, message: 'A new component was observed but Creator refused its undo snapshot.', details: { nodeId: args.reference.id, componentId: newId, componentType: args.componentType, snapshotConfirmed: false, retrySafe: false }, recovery: 'Inspect the existing component and undo state; do not repeat creation.' });
         const verifiedNode = await Editor.Message.request('scene', 'query-node', args.reference.id);
         const verifiedMatches = checkedComponents(verifiedNode).filter((component: unknown) => componentUuid(component) === newId);
         if (verifiedMatches.length !== 1 || componentType(verifiedMatches[0]) !== args.componentType) throw new ToolError({ code: 'COMPONENT_CREATE_POSTCONDITION_UNKNOWN', status: 502, message: 'Added component UUID/type was not uniquely confirmed after snapshot.', details: { nodeId: args.reference.id, componentId: newId, componentType: args.componentType, retrySafe: false }, recovery: 'Inspect the node inventory before any further mutation.' });
         return { reference: { id: newId, type: args.componentType } };
+        } catch (error) {
+            throw new ToolError({ code: error instanceof ToolError ? error.code : 'COMPONENT_CREATE_POSTCONDITION_UNKNOWN', status: error instanceof ToolError ? error.status : 502, message: error instanceof ToolError ? error.message : 'Component creation returned but subsequent observation or snapshot failed.', details: { ...(error instanceof ToolError ? error.details : {}), nodeId: args.reference.id, componentType: args.componentType, componentId: acknowledgedComponentId, retrySafe: false, restored: null, cause: error instanceof Error ? error.message.slice(0, 512) : String(error).slice(0, 512) }, recovery: 'Inspect the exact node and any acknowledged component before another mutation; no creation replay or component deletion was attempted.' });
+        }
     }
 
     @utcpTool(

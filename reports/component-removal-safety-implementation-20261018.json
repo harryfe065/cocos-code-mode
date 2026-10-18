@@ -1,0 +1,17 @@
+{
+  "date":"2026-10-18",
+  "status":"implemented-needs-verification",
+  "scope":"nodeComponentRemove and nodeComponentAdd safety continuation",
+  "changes":["Confirm queried UUID before dispatch","Track dispatched removal outcome","Refuse unknown outcome with COMPONENT_REMOVE_OUTCOME_UNKNOWN retrySafe:false/restored:null","Require native refusal handling and typed failure evidence before retry"],
+  "additionContinuation": {
+    "status": "implemented-needs-verification",
+    "changes": ["Snapshot node reference and component class before first await", "Place startCatchLogging inside cleanup boundary", "Distinguish logging setup failure before create dispatch from uncertain creation outcomes"],
+    "directHandlerSmoke": "Current TypeScript transpiled in memory with substituted native IPC: logging setup throws, cleanup invoked once, create dispatches zero; COMPONENT_LOGGING_SETUP_FAILED returned.",
+    "requiredVerification": ["Caller input mutation during await", "Partial logging setup and cleanup failure", "Native logging collector ownership and concurrent operations", "Native create/snapshot/readback and public alias"]
+  },
+  "snapshotContinuation": { "status": "implemented-needs-verification", "changes": ["Validate bounded nonblank reference IDs for add/remove before IPC", "Track confirmed component absence separately from undo snapshot", "Reject snapshot:false and report COMPONENT_REMOVE_SNAPSHOT_UNCONFIRMED with removed:true and retrySafe:false"], "requiredVerification": ["Invalid references dispatch no IPC", "Removal absence followed by snapshot rejection/transport failure", "Normal removal success"] },
+  "creationSnapshotContinuation": { "status": "implemented-needs-verification", "change": "Explicit snapshot:false after uniquely observing a new component refuses success as COMPONENT_CREATE_SNAPSHOT_UNCONFIRMED, retaining component identity and retrySafe:false without create replay/deletion.", "requiredVerification": ["Create acknowledged component then snapshot:false", "Snapshot transport failure retains observed component UUID", "Normal snapshot/readback success"] },
+  "verification":[],
+  "required":["native remove acknowledgement","lost response after actual removal","replacement identity","snapshot persistence","public alias behavior"],
+  "qualification":false
+}

@@ -16,15 +16,27 @@ import path from 'path';
 
 
 export function load() { }
-export function unload() { void methods.stopCatchAll(); }
-let _originalConsoleError: (...data: unknown[]) => void = () => { };
+export function unload() {
+    if (_loggingOwner && console.error === _loggingWrapper && _originalConsoleError) console.error = _originalConsoleError;
+    _loggingOwner = null;
+    _loggingWrapper = null;
+    _originalConsoleError = null;
+    _caughtLogs = [];
+    void methods.stopCatchAll();
+}
+let _originalConsoleError: ((...data: unknown[]) => void) | null = null;
 let _caughtLogs: string[] = [];
+let _loggingOwner: string | null = null;
+let _loggingWrapper: ((...data: unknown[]) => void) | null = null;
 
 // Scene-console capture is opt-in and writes bounded JSONL in the current editor scope.
 let _catchAllActive = false;
 let _origLog: typeof console.log | null = null;
 let _origWarn: typeof console.warn | null = null;
 let _origErr: typeof console.error | null = null;
+let _catchAllLog: typeof console.log | null = null;
+let _catchAllWarn: typeof console.warn | null = null;
+let _catchAllError: typeof console.error | null = null;
 let _sceneLogFile: string | null = null;
 const _sceneLogMaxBytes = 4 * 1024 * 1024;
 const _sceneLogRetention = 4;
@@ -99,22 +111,56 @@ export const methods = {
         return executeAudioPlayback(request, globals.cc, methods.findRuntimeNodeUuid);
     },
 
-    async startCatchLogging() {
-        _caughtLogs = [];
-        _originalConsoleError = console.error;
-        console.error = (...data: unknown[]) => {
-            const msg = data.map(a => a instanceof Error ? a.message : a).join(' ');
-            _caughtLogs.push(msg);
-            _originalConsoleError(...data);
-        }
+    async startCatchLogging(owner: string, expiresAt: number): Promise<{ owner: string; active: true; expiresAt: number }> {
+        if (typeof owner !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(owner)) throw new Error('Logging capture requires a bounded owner token.');
+        if (!Number.isSafeInteger(expiresAt) || expiresAt <= Date.now() || expiresAt > Date.now() + 10000) throw new Error('Logging setup deadline expired or is invalid.');
+        if (_loggingOwner) throw new Error('Logging capture is already owned.');
+        const original = console.error;
+        const logs: string[] = [];
+        const wrapper = (...data: unknown[]): void => {
+            if (logs.length < 128) {
+                try {
+                    let message = '';
+                    for (let index = 0; index < Math.min(data.length, 32) && message.length < 2048; index++) {
+                        const argument = data[index];
+                        const text = typeof argument === 'string' ? argument : argument instanceof Error ? '[Error]' : argument === null ? 'null' : typeof argument === 'number' || typeof argument === 'boolean' || typeof argument === 'undefined' ? String(argument) : '[non-scalar]';
+                        if (index) message += ' ';
+                        message += text.slice(0, 2048 - message.length);
+                    }
+                    logs.push(message);
+                }
+                catch { logs.push('[unprintable error]'); }
+            }
+            original(...data);
+        };
+        _caughtLogs = logs;
+        _originalConsoleError = original;
+        _loggingWrapper = wrapper;
+        _loggingOwner = owner;
+        console.error = wrapper;
+        return { owner, active: true, expiresAt };
     },
 
-    async stopCatchLogging(): Promise<string[]> {
-        console.error = _originalConsoleError;
-        return _caughtLogs;
+    async inspectCatchLogging(owner: string): Promise<{ active: boolean; owned: boolean; handlerCurrent: boolean }> {
+        if (typeof owner !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(owner)) throw new Error('Logging inspection requires a bounded owner token.');
+        return { active: _loggingOwner !== null, owned: _loggingOwner === owner, handlerCurrent: _loggingOwner !== null && console.error === _loggingWrapper };
+    },
+
+    async stopCatchLogging(owner: string): Promise<string[]> {
+        if (!_loggingOwner) return [];
+        if (_loggingOwner !== owner) throw new Error('Logging capture owner mismatch; collector was not changed.');
+        if (console.error !== _loggingWrapper) throw new Error('Console error handler changed outside capture; restoration refused.');
+        console.error = _originalConsoleError!;
+        const logs = _caughtLogs;
+        _caughtLogs = [];
+        _originalConsoleError = null;
+        _loggingWrapper = null;
+        _loggingOwner = null;
+        return logs;
     },
 
     async startCatchAll(instanceId?: unknown): Promise<boolean> {
+        if (_loggingOwner) throw new Error('Cannot change console capture while an operation owns logging.');
         if (_catchAllActive) return true;
         let fs: any;
         try { fs = require('fs'); } catch {
@@ -130,18 +176,24 @@ export const methods = {
         _origLog = console.log;
         _origWarn = console.warn;
         _origErr = console.error;
-        console.log = (...args: unknown[]) => { _writeSceneLog('log', args); _origLog!(...args); };
-        console.warn = (...args: unknown[]) => { _writeSceneLog('warn', args); _origWarn!(...args); };
-        console.error = (...args: unknown[]) => { _writeSceneLog('error', args); _origErr!(...args); };
+        const originalLog = console.log, originalWarn = console.warn, originalError = console.error;
+        _catchAllLog = (...args: unknown[]) => { _writeSceneLog('log', args); originalLog(...args); };
+        _catchAllWarn = (...args: unknown[]) => { _writeSceneLog('warn', args); originalWarn(...args); };
+        _catchAllError = (...args: unknown[]) => { _writeSceneLog('error', args); originalError(...args); };
+        console.log = _catchAllLog;
+        console.warn = _catchAllWarn;
+        console.error = _catchAllError;
         return true;
     },
 
     async stopCatchAll(): Promise<void> {
+        if (_loggingOwner) throw new Error('Cannot stop console capture while an operation owns logging.');
         if (!_catchAllActive) return;
-        if (_origLog) console.log = _origLog;
-        if (_origWarn) console.warn = _origWarn;
-        if (_origErr) console.error = _origErr;
+        if (_origLog && console.log === _catchAllLog) console.log = _origLog;
+        if (_origWarn && console.warn === _catchAllWarn) console.warn = _origWarn;
+        if (_origErr && console.error === _catchAllError) console.error = _origErr;
         _origLog = _origWarn = _origErr = null;
+        _catchAllLog = _catchAllWarn = _catchAllError = null;
         _catchAllActive = false;
         _sceneLogFile = null;
     },

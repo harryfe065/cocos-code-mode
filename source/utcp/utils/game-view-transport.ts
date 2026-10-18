@@ -131,7 +131,7 @@ async function executeBounded(target: HostContents, source: string, deadline: nu
             message: mutation ? 'Game-view mutation was dispatched but its outcome is unknown.' : 'Game-view renderer inspection did not complete.',
             details: { cause: (error instanceof Error ? error.message : String(error)).slice(0, 512), ...(mutation ? { mutationDispatched: true, outcome: 'unknown', retrySafe: false } : {}) },
             recovery: mutation ? 'Inspect the Game View before retrying; a queued renderer operation may still complete.' : 'Wait for the Game View renderer to respond, then inspect it again.' });
-        if (mutation && request) Object.defineProperty(failure, 'pendingRequest', { value: request });
+        if (mutation && request) Object.defineProperty(failure, 'pendingRequest', { value: (error instanceof ToolError ? (error as ToolError & { pendingRequest?: Promise<unknown> }).pendingRequest : undefined) ?? request });
         throw failure;
     } finally { clearTimeout(timer); }
 }
@@ -227,12 +227,13 @@ export async function setGameViewTimeScale(scale: number): Promise<GameViewRunti
 }
 
 /** Internal trusted scripts only. Public tools supply validated data, never caller code. */
-export async function executeGameViewOperation(targetId: string, operationSource: string, timeoutMs = 5000, mutation = false): Promise<unknown> {
+export async function executeGameViewOperation(targetId: string, operationSource: string, timeoutMs = 5000, mutation = false, callerDeadline?: number, assertActive?: () => void): Promise<unknown> {
     if (typeof targetId !== 'string' || !targetId || targetId.length > 256 || typeof operationSource !== 'string' || Buffer.byteLength(operationSource, 'utf8') > 128 * 1024
-        || !Number.isInteger(timeoutMs) || timeoutMs < 100 || timeoutMs > 10000) {
+        || !Number.isInteger(timeoutMs) || timeoutMs < 100 || timeoutMs > 10000 || callerDeadline !== undefined && !Number.isFinite(callerDeadline)) {
         throw new ToolError({ code: 'INVALID_ARGUMENT', status: 400, message: 'Invalid bounded Game View operation.' });
     }
-    const deadline = Date.now() + timeoutMs;
+    const deadline = Math.min(Date.now() + timeoutMs, callerDeadline ?? Infinity);
+    assertActive?.();
     const electron = require('electron') as ElectronHost;
     const main = creatorMainWindow(electron).webContents;
     const host = await readHost(main, deadline);
@@ -241,6 +242,7 @@ export async function executeGameViewOperation(targetId: string, operationSource
     const before = runningState(host, target, await executeBounded(target, RUNTIME_INSPECTION, deadline));
     if (before.sceneUuid !== targetId) throw new ToolError({ code: 'RUNTIME_TARGET_CHANGED', status: 409, message: 'Game View scene differs from the bound session.' });
     assertHostUnchanged(electron, await readHost(main, deadline), target, url);
+    assertActive?.();
     const source = `(async () => { const scene = globalThis.cc?.director?.getScene(); if (globalThis.cc?.GAME_VIEW !== true || !scene || scene.uuid !== ${JSON.stringify(targetId)} || Date.now() >= ${deadline}) throw new Error('Game View target/deadline changed before operation'); const result = await (${operationSource}); if (scene !== globalThis.cc?.director?.getScene()) throw new Error('Game View target changed during operation'); return result; })()`;
     const result = await executeBounded(target, source, deadline, mutation, timeoutMs);
     try {

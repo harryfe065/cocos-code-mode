@@ -6,6 +6,8 @@ export interface AudioPlaybackRequest {
     operation: AudioPlaybackOperation;
     time?: number;
     timeoutMs?: number;
+    /** Internal caller budget; public tools never accept an absolute renderer deadline. */
+    expiresAt?: number;
     expectedComponentUuid?: string;
     expectedClipUuid?: string;
 }
@@ -93,6 +95,7 @@ export function createAudioPlaybackExecutor() {
     ): Promise<AudioPlaybackResult> {
         let source!: AudioSourceHandle;
         let locked = false;
+        let dispatched = false;
         let node!: AudioRuntimeNode;
         let started = false;
         let ended = false;
@@ -110,6 +113,7 @@ export function createAudioPlaybackExecutor() {
             }
             const timeoutMs = request.timeoutMs ?? 1000;
             requireCondition(Number.isInteger(timeoutMs) && timeoutMs >= 100 && timeoutMs <= 5000, 'INVALID_ARGUMENT', 'timeoutMs must be an integer from 100 to 5000.', 400);
+            requireCondition(request.expiresAt === undefined || Number.isFinite(request.expiresAt), 'INVALID_ARGUMENT', 'expiresAt must be a finite internal deadline.', 400);
             requireCondition(request.operation === 'seek' ? Number.isFinite(request.time) : request.time === undefined, 'INVALID_ARGUMENT', 'Only seek accepts a finite time in seconds.', 400);
             const scene = cc?.director?.getScene?.();
             const checkTarget = () => {
@@ -172,6 +176,8 @@ export function createAudioPlaybackExecutor() {
             if ((request.operation === 'pause' && state.playbackState === 'paused')
                 || (request.operation === 'stop' && state.playbackState === 'stopped' && state.currentTime === 0)
                 || (request.operation === 'seek' && state.currentTime === request.time)) return success();
+            const deadline = Math.min(Date.now() + timeoutMs, request.expiresAt ?? Infinity);
+            requireCondition(Date.now() < deadline, 'AUDIO_STATE_TIMEOUT', 'Audio caller deadline expired before playback dispatch.', 409);
             const previousTime = state.currentTime;
             busy.add(source);
             locked = true;
@@ -181,8 +187,9 @@ export function createAudioPlaybackExecutor() {
                 node.on(events.STARTED, onStarted);
                 node.on(events.ENDED, onEnded);
             }
-            const deadline = Date.now() + timeoutMs;
+            requireCondition(Date.now() < deadline, 'AUDIO_STATE_TIMEOUT', 'Audio caller deadline expired before playback dispatch.', 409);
             try {
+                dispatched = true;
                 if (request.operation === 'seek') source.currentTime = request.time!;
                 else source[request.operation]();
             } catch (error) { uncertain.add(source); throw error; }
@@ -202,10 +209,10 @@ export function createAudioPlaybackExecutor() {
                 await new Promise<void>((resolve) => setTimeout(resolve, Math.min(20, remaining)));
             }
         } catch (error) {
-            if (locked) uncertain.add(source);
+            if (dispatched) uncertain.add(source);
             return { success: false, error: { code: error instanceof AudioFailure ? error.code : 'AUDIO_OPERATION_FAILED',
                 status: error instanceof AudioFailure ? error.status : 500, message: error instanceof Error ? error.message : String(error),
-                ...(locked ? { pendingMayComplete: true } : {}) } };
+                ...(dispatched ? { pendingMayComplete: true } : {}) } };
         } finally {
             try {
                 if (listening && events) {

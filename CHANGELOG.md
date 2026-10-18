@@ -2,6 +2,10 @@
 
 ## Unreleased — Creator 3.7 follow-through
 
+- Stabilize scenario mutation lifetime: carry cancellation/absolute deadlines through readiness, refuse late undispatched controls, and retain session ownership until underlying native requests settle after wrapper timeouts. Native work already sent is not cancelled or replayed.
+- Preserve full animationEvents capture windows with bounded completion allowance inside total scenario deadlines; refuse insufficient capture/verification budgets before listener registration.
+- Restore source/declaration editor-IPC argument dependencies in get_related_types; keep member/related-type navigation metadata-only and reject live navigation references.
+- Align offline index publication limits with loader bounds before publishing; fix instantiated inherited setter write types (including distinct getter/write types) and collect exported class-expression instance/static members without executing source.
 - Size the finalized discovery page envelope rather than refusing against an empty provisional page with a longer continuation cursor; exact-fit terminal pages remain supported and final maxBytes is enforced.
 - Add whole-source diagnosticSummary code/count histogram to animationTimelineInspect, independent of diagnostic filters/pages and track selection. Counts describe retrieved dump diagnostics only, not runtime or binding validity.
 - Add exact diagnosticCode filtering with matchedDiagnostics to animationTimelineInspect. Diagnostic offsets page matching errors while whole-source diagnostics/counts and revision remain independent of selection; empty matches never imply a valid clip.

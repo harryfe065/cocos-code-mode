@@ -146,11 +146,9 @@ function typeInfo(checker, type, node) {
           unresolved.push({ kind: 'semantic-adapter-required', reference: 'accessor-property' });
           for (const accessor of property.declarations) {
             if (!ts.isSetAccessorDeclaration(accessor)) continue;
-            if (current.objectFlags & ts.ObjectFlags.Reference && current.target !== current && current.target?.typeParameters?.length) {
-              unresolved.push({ kind: 'setter-write-type', reference: 'Instantiated setter input requires compiler write-type resolution' });
-            } else {
-              for (const parameter of accessor.parameters) visit(checker.getTypeAtLocation(parameter));
-            }
+            const writeType = setterWriteType(checker, property);
+            if (writeType) visit(writeType);
+            else unresolved.push({ kind: 'setter-write-type', reference: 'Compiler write-type resolution unavailable' });
           }
         }
         const key = propertyDeclaration?.name;
@@ -225,7 +223,19 @@ function typeInfo(checker, type, node) {
   return { type: canonicalType(rendered), declaredType: node ? compact(node) : null, references: [...references.values()].sort((a, b) => compare(a.name, b.name)),
     unresolved: [...new Map(unresolved.map(item => [json(item), item])).values()].sort((a, b) => compare(json(a), json(b))) };
 }
-function signatureInfo(checker, signature, declaration, index, returnType) {
+// A parsed element-assignment key asks the public checker API for the symbol's
+// write type, including inherited generic substitutions. A declaration parameter
+// is uninstantiated, and a property read would incorrectly reuse the getter type.
+const setterWriteSource = ts.createSourceFile('catalog-setter-write.ts', 'receiver["value"] = input;', ts.ScriptTarget.Latest, true);
+const setterWriteLocation = setterWriteSource.statements[0].expression.left.argumentExpression;
+function setterWriteType(checker, symbol) {
+  try {
+    return checker.getTypeOfSymbolAtLocation(symbol, setterWriteLocation) || null;
+  } catch {
+    return null;
+  }
+}
+function signatureInfo(checker, signature, declaration, index, returnType, writeType) {
   const unresolved = [];
   const declarationMetadata = metadata(declaration);
   const visibility = declarationMetadata.visibility;
@@ -265,7 +275,7 @@ function signatureInfo(checker, signature, declaration, index, returnType) {
       if (!Number.isFinite(requiredLength)) requiredLength = 0;
       if (requiredLength > 0) minArgumentCount = Math.max(minArgumentCount, position + requiredLength);
     }
-    const info = typeInfo(checker, checker.getTypeOfSymbolAtLocation(symbol, parameter || declaration), parameter?.type);
+    const info = typeInfo(checker, position === 0 && writeType || checker.getTypeOfSymbolAtLocation(symbol, parameter || declaration), parameter?.type);
     unresolved.push(...info.unresolved);
     return { name: symbol.name, type: info.type, declaredType: info.declaredType, references: info.references, optional: !!(symbol.flags & ts.SymbolFlags.Optional) || !!parameter?.questionToken || !!parameter?.initializer && position >= signature.minArgumentCount,
       jsdoc: parameter?.jsDoc?.map(doc => doc.getText()).join('\n') || null,
@@ -275,7 +285,9 @@ function signatureInfo(checker, signature, declaration, index, returnType) {
   for (let position = 0; position < parameters.length; position++) {
     if (position < minArgumentCount && parameters[position].defaultExpression !== null) parameters[position].optional = false;
   }
-  const result = typeInfo(checker, returnType || checker.getReturnTypeOfSignature(signature), declaration.type);
+  // Setter declarations cannot annotate a return type or return a value. The
+  // compiler reports `any` for bodyless setter signatures, not their write type.
+  const result = typeInfo(checker, ts.isSetAccessorDeclaration(declaration) ? checker.getVoidType() : returnType || checker.getReturnTypeOfSignature(signature), declaration.type);
   unresolved.push(...result.unresolved);
   const nativePredicate = checker.getTypePredicateOfSignature(signature);
   const predicateInfo = nativePredicate?.type ? typeInfo(checker, nativePredicate.type, declaration.type?.type) : null;
@@ -304,14 +316,21 @@ function signatureInfo(checker, signature, declaration, index, returnType) {
     return { name: parameter.symbol?.name || checker.typeToString(parameter), const: modifiers.some(modifier => modifier.kind === ts.SyntaxKind.ConstKeyword), variance, constraint: info?.type || null, default: compact(declared?.default) };
   });
   return { overload: index, visibility, jsdoc: declarationMetadata.jsdoc, minArgumentCount, kind: ts.isSetAccessorDeclaration(declaration) ? 'set' : ts.isGetAccessorDeclaration(declaration) ? 'get' : 'call',
-    text: returnType && ts.isGetAccessorDeclaration(declaration) ? `(): ${result.type}` : checker.signatureToString(signature, declaration, ts.TypeFormatFlags.NoTruncation), typeParameters, parameters, receiver, predicate,
+    text: writeType ? `(${parameters.map(parameter => `${parameter.name}: ${parameter.type}`).join(', ')}): ${result.type}` : returnType && ts.isGetAccessorDeclaration(declaration) ? `(): ${result.type}` : checker.signatureToString(signature, declaration, ts.TypeFormatFlags.NoTruncation), typeParameters, parameters, receiver, predicate,
     returnType: result.type, declaredReturnType: result.declaredType, returnReferences: result.references,
     references: [...genericReferences.values()].sort((a, b) => compare(json(a), json(b))),
     unresolved: [...new Map(unresolved.map(item => [json(item), item])).values()].sort((a, b) => compare(json(a), json(b))) };
 }
 function signatures(checker, symbol, declaration) {
   const accessors = (symbol.declarations || []).filter(d => ts.isGetAccessorDeclaration(d) || ts.isSetAccessorDeclaration(d));
-  if (accessors.length) return accessors.map((decl, i) => signatureInfo(checker, checker.getSignatureFromDeclaration(decl), decl, i, ts.isGetAccessorDeclaration(decl) ? checker.getTypeOfSymbolAtLocation(symbol, declaration) : undefined));
+  if (accessors.length) return accessors.map((decl, i) => {
+    const setter = ts.isSetAccessorDeclaration(decl);
+    const writeType = setter ? setterWriteType(checker, symbol) : undefined;
+    const row = signatureInfo(checker, checker.getSignatureFromDeclaration(decl), decl, i,
+      ts.isGetAccessorDeclaration(decl) ? checker.getTypeOfSymbolAtLocation(symbol, declaration) : undefined, writeType);
+    if (setter && !writeType) row.unresolved.push({ kind: 'setter-write-type', reference: 'Compiler write-type resolution unavailable' });
+    return row;
+  });
   const type = checker.getTypeOfSymbolAtLocation(symbol, declaration);
   const calls = checker.getSignaturesOfType(type, ts.SignatureKind.Call);
   const constructs = checker.getSignaturesOfType(type, ts.SignatureKind.Construct);

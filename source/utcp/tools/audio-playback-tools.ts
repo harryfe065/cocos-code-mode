@@ -73,17 +73,18 @@ const findNodeSource = `(async function findRuntimeNode(id) {
 })`;
 const executorSource = createAudioPlaybackExecutor.toString();
 
-function operationSource(request: { sessionId: string; targetId: string; nodeUuid: string; operation: AudioPlaybackOperation; time?: number; timeoutMs?: number; expectedComponentUuid?: string; expectedClipUuid?: string }): string {
+function operationSource(request: { sessionId: string; targetId: string; nodeUuid: string; operation: AudioPlaybackOperation; time?: number; timeoutMs?: number; expiresAt?: number; expectedComponentUuid?: string; expectedClipUuid?: string }): string {
     const requestLiteral = JSON.stringify(request);
     return `(() => {
         const key = Symbol.for('ccp3x.audioPlaybackExecutor');
         let execute = globalThis[key];
         if (typeof execute !== 'function') {
-            execute = Object.assign((${executorSource})(), { identityContract: 2, snapshotContract: 3 });
+            execute = Object.assign((${executorSource})(), { identityContract: 2, snapshotContract: 3, deadlineContract: 1 });
             globalThis[key] = execute;
         }
         if ((${requestLiteral}.expectedComponentUuid !== undefined || ${requestLiteral}.expectedClipUuid !== undefined) && execute.identityContract !== 2) return { success: false, error: { code: 'AUDIO_EXECUTOR_STALE', status: 409, message: 'Existing audio executor cannot enforce identity guards. Restart the owned preview explicitly; cached mutation ownership was not reset.' } };
         if (execute.snapshotContract !== 3) return { success: false, error: { code: 'AUDIO_EXECUTOR_STALE', status: 409, message: 'Existing audio executor lacks current sound snapshot fields. Explicit owned preview restart required; mutation ownership was preserved.' } };
+        if (${requestLiteral}.expiresAt !== undefined && execute.deadlineContract !== 1) return { success: false, error: { code: 'AUDIO_EXECUTOR_STALE', status: 409, message: 'Existing audio executor cannot enforce the caller deadline. Explicit owned preview restart required; mutation ownership was preserved.' } };
         return execute(${requestLiteral}, globalThis.cc, ${findNodeSource});
     })()`;
 }
@@ -105,9 +106,9 @@ export class AudioPlaybackTools {
             time: { type: 'number', minimum: 0 }, timeoutMs: { type: 'integer', minimum: 100, maximum: 5000 } },
         required: ['sessionId', 'nodeReference', 'operation'],
     }, outputSchema, 'POST', ['audio', 'playback', 'runtime', 'control'])
-    async audioPlaybackControl(args: AudioPlaybackControlArgs): Promise<AudioPlaybackSuccess> {
+    async audioPlaybackControl(args: AudioPlaybackControlArgs, assertActive?: () => void, deadline?: number): Promise<AudioPlaybackSuccess> {
         if (!args || !['play', 'pause', 'stop', 'seek'].includes(args.operation)) throw new ToolError({ code: 'INVALID_ARGUMENT', status: 400, message: 'Control requires play, pause, stop, or seek.' });
-        return this.execute(args, args.operation, args.time, args.timeoutMs);
+        return this.execute(args, args.operation, args.time, args.timeoutMs, deadline, assertActive);
     }
 
     @utcpTool('audioPlaybackObserve', 'Observe one validated AudioSource in the attached Creator 3.7.3 Game View with truthful readback.', {
@@ -196,11 +197,11 @@ export class AudioPlaybackTools {
             if (!inspected.success || !inspected.ready || !session || !('targetId' in session) || session.sessionId !== args.sessionId) throw new ToolError({ code: 'RUNTIME_NOT_READY', status: 409, message: 'The attached runtime session is not ready.' });
             if (session.targetKind !== 'game-view') throw new ToolError({ code: 'UNSUPPORTED_RUNTIME_TRANSPORT', status: 422, message: 'Audio supports the Creator Game View transport only.' });
             assertActive?.();
-            const request = { sessionId: args.sessionId, targetId: session.targetId, nodeUuid: args.nodeReference.id, expectedComponentUuid: args.expectedComponentUuid, expectedClipUuid: args.expectedClipUuid, operation, ...(time === undefined ? {} : { time }), ...(timeoutMs === undefined ? {} : { timeoutMs }) };
+            const request = { sessionId: args.sessionId, targetId: session.targetId, nodeUuid: args.nodeReference.id, expectedComponentUuid: args.expectedComponentUuid, expectedClipUuid: args.expectedClipUuid, operation, ...(time === undefined ? {} : { time }), ...(deadline === undefined ? {} : { expiresAt: deadline }), ...(timeoutMs === undefined ? {} : { timeoutMs: deadline === undefined ? timeoutMs : Math.min(timeoutMs, deadline - Date.now()) }) };
             const remaining = deadline === undefined ? undefined : deadline - Date.now();
             if (remaining !== undefined && remaining < 100) throw new ToolError({ code: 'AUDIO_STATE_TIMEOUT', status: 409, message: 'Audio wait deadline exhausted during session inspection; no read dispatched.' });
             const transportTimeout = remaining === undefined ? Math.min(10000, (timeoutMs ?? 1000) + 2000) : Math.min(10000, remaining);
-            const result = await executeGameViewOperation(session.targetId, operationSource(request), transportTimeout, operation !== 'observe');
+            const result = await executeGameViewOperation(session.targetId, operationSource(request), transportTimeout, operation !== 'observe', deadline, assertActive);
             throwRuntimeResult(result);
             if (result.sessionId !== args.sessionId || result.targetId !== session.targetId || result.nodeUuid !== args.nodeReference.id || result.operation !== operation
                 || args.expectedComponentUuid !== undefined && result.componentUuid !== args.expectedComponentUuid || args.expectedClipUuid !== undefined && result.clipUuid !== args.expectedClipUuid) throw new ToolError({ code: 'INVALID_RUNTIME_RESPONSE', status: 502, message: 'Audio response does not identify the dispatched session/node/operation and expected source/clip.', details: { mutationDispatched: operation !== 'observe', retrySafe: false, pendingMayComplete: operation !== 'observe' }, recovery: 'Inspect the exact audio target before any further control; do not replay this request blindly.' });

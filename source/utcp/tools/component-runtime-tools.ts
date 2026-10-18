@@ -99,11 +99,11 @@ export class ComponentRuntimeTools {
     @utcpTool('animationPlaybackControl', 'Control one exact Animation/SkeletalAnimation component and clip in attached Creator3.7 Game View through finite play/pause/resume/stop with actual state read-back. Component pause/resume/stop affect its active states, not an isolated clip. No edit-scene substitution or automatic replay.', {
         type: 'object', additionalProperties: false, properties: { ...targetProperties, operation: { type: 'string', enum: ['play', 'pause', 'resume', 'stop'] }, clipName: { type: 'string', minLength: 1, maxLength: 256 }, clipUuid: { type: 'string', minLength: 1, maxLength: 256 }, timeoutMs: { type: 'integer', minimum: 100, maximum: 3000 } }, required: ['sessionId', 'nodeReference', 'componentId', 'operation', 'clipName', 'clipUuid'],
     }, componentOutputSchema, 'POST', ['animation', 'playback', 'control', 'runtime'])
-    async animationPlaybackControl(args: SkeletalArgs): Promise<Record<string, unknown>> {
+    async animationPlaybackControl(args: SkeletalArgs, assertActive?: () => void, deadline?: number): Promise<Record<string, unknown>> {
         validateComponentTarget({ sessionId: args?.sessionId ?? '', nodeReference: { id: args?.nodeReference?.id ?? '' }, componentId: args?.componentId }, true);
         requireComponentText(args.clipName, 'clipName'); requireComponentText(args.clipUuid, 'clipUuid');
         if (!['play', 'pause', 'resume', 'stop'].includes(args.operation ?? '')) throw new ToolError({ code: 'INVALID_ARGUMENT', status: 400, message: 'operation must be play, pause, resume or stop.' });
-        return executeComponentOperation({ kind: 'animation', operation: args.operation!, sessionId: args.sessionId!, nodeReference: { id: args.nodeReference!.id! }, componentId: args.componentId!, clipName: args.clipName!, clipUuid: args.clipUuid!, timeoutMs: validateTimeout(args.timeoutMs) });
+        return executeComponentOperation({ kind: 'animation', operation: args.operation!, sessionId: args.sessionId!, nodeReference: { id: args.nodeReference!.id! }, componentId: args.componentId!, clipName: args.clipName!, clipUuid: args.clipUuid!, timeoutMs: validateTimeout(args.timeoutMs) }, assertActive, deadline);
     }
 
     @utcpTool('skeletalAnimationPlay', 'Play, pause, resume, stop or observe one exact cc.SkeletalAnimation clip in Game View. observe is read-only; Spine and DragonBones are unsupported.', {
@@ -186,17 +186,17 @@ export class ComponentRuntimeTools {
     @utcpTool('animationPlaybackEvents', 'Observe bounded Animation/SkeletalAnimation lifecycle events for one exact Game View clip. Read-only playback observation with listener cleanup; no event history before registration or automatic playback dispatch.', {
         type: 'object', additionalProperties: false, properties: { ...targetProperties, clipName: { type: 'string', minLength: 1, maxLength: 256 }, clipUuid: { type: 'string', minLength: 1, maxLength: 256 }, maxEvents: { type: 'integer', minimum: 1, maximum: 100 }, timeoutMs: { type: 'integer', minimum: 100, maximum: 3000 } }, required: ['sessionId', 'nodeReference', 'componentId', 'clipName', 'clipUuid'],
     }, componentOutputSchema, 'POST', ['animation', 'events', 'runtime', 'read-only'])
-    async animationPlaybackEvents(args: EventArgs, assertActive?: () => void): Promise<Record<string, unknown>> {
+    async animationPlaybackEvents(args: EventArgs, assertActive?: () => void, deadline?: number): Promise<Record<string, unknown>> {
         const operation = validateSkeletal(args, 'observe');
         if (args.maxEvents !== undefined && (!Number.isInteger(args.maxEvents) || args.maxEvents < 1 || args.maxEvents > 100)) throw new ToolError({ code: 'INVALID_ARGUMENT', status: 400, message: 'maxEvents must be an integer from1 to100.' });
-        return executeComponentOperation({ ...operation, kind: 'events', maxEvents: args.maxEvents ?? 20 }, assertActive);
+        return executeComponentOperation({ ...operation, kind: 'events', maxEvents: args.maxEvents ?? 20 }, assertActive, deadline);
     }
 
     @utcpTool('animationGraphPreview', 'Inspect one exact cc.animation.AnimationController runtime graph, or set one typed FLOAT/INTEGER/BOOLEAN variable with read-back. No dynamic methods or invented graph component are used.', {
         type: 'object', additionalProperties: false, properties: { ...targetProperties, operation: { type: 'string', enum: ['inspect', 'setVariable'] }, expectedGraphUuid: { type: 'string', minLength: 1, maxLength: 256 }, variable: { type: 'object', additionalProperties: false, properties: { name: { type: 'string', minLength: 1, maxLength: 256 }, type: { type: 'string', enum: ['float', 'integer', 'boolean'] }, value: {}, expectedValue: { type: ['number', 'boolean'] } }, required: ['name', 'type', 'value'] }, timeoutMs: { type: 'integer', minimum: 100, maximum: 3000 } },
         required: ['sessionId', 'nodeReference', 'componentId', 'operation'],
     }, componentOutputSchema, 'POST', ['animation', 'graph', 'preview', 'runtime'])
-    async animationGraphPreview(args: GraphArgs): Promise<Record<string, unknown>> {
+    async animationGraphPreview(args: GraphArgs, assertActive?: () => void, deadline?: number): Promise<Record<string, unknown>> {
         validateComponentTarget({ sessionId: args?.sessionId ?? '', nodeReference: { id: args?.nodeReference?.id ?? '' }, componentId: args?.componentId }, true);
         if (args.operation !== 'inspect' && args.operation !== 'setVariable') throw new ToolError({ code: 'INVALID_ARGUMENT', status: 400, message: 'operation must be inspect or setVariable.' });
         if (args.expectedGraphUuid !== undefined) requireComponentText(args.expectedGraphUuid, 'expectedGraphUuid');
@@ -212,7 +212,7 @@ export class ComponentRuntimeTools {
             const variableValue: number | boolean = candidate.value as number | boolean;
             variable = { name: candidate.name, type: variableType, value: variableValue, expectedValue: candidate.expectedValue };
         }
-        return executeComponentOperation({ kind: 'graph', operation: args.operation, sessionId: args.sessionId!, nodeReference: { id: args.nodeReference!.id! }, componentId: args.componentId!, variable, expectedGraphUuid: args.expectedGraphUuid, timeoutMs: validateTimeout(args.timeoutMs) });
+        return executeComponentOperation({ kind: 'graph', operation: args.operation, sessionId: args.sessionId!, nodeReference: { id: args.nodeReference!.id! }, componentId: args.componentId!, variable, expectedGraphUuid: args.expectedGraphUuid, timeoutMs: validateTimeout(args.timeoutMs) }, assertActive, deadline);
     }
 
     @utcpTool('animationGraphWaitForVariable', 'Observe one exact runtime graph variable until a typed value matches. Exact graph UUID required; inspect-only, no setValue or runtime restart. Target drift/missing/type/deadline errors fail closed.', {

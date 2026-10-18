@@ -193,6 +193,9 @@ async function componentOperation(args: ComponentOperation & { expiresAt: number
                 return { ...animationIdentity, state: result };
             }
             if (typeof c.on !== 'function' || typeof c.off !== 'function') fail('UNSUPPORTED_RUNTIME_COMPONENT', 'Animation event APIs are unavailable.');
+            const captureTimeout = args.timeoutMs ?? 1000;
+            if (args.expiresAt - Date.now() < captureTimeout) fail('RUNTIME_STATE_TIMEOUT', 'Full animation capture window cannot fit before its verification reserve; no listeners registered.');
+            const eventDeadline = Date.now() + captureTimeout;
             assertDeadline();
             const events: Array<Record<string, unknown>> = []; const listeners: Array<{ type: string; callback: RuntimeCallback }> = [];
             let timer: ReturnType<typeof setTimeout> | undefined; let poll: ReturnType<typeof setInterval> | undefined; const clock = globalThis.performance;
@@ -207,9 +210,9 @@ async function componentOperation(args: ComponentOperation & { expiresAt: number
                     const finish = () => { if (settled) return; settled = true; done(); };
                     const abort = (error: unknown) => { if (settled) return; settled = true; reject(error); };
                     const checkCancellation = () => { if (cancelled()) { abort({ code: 'RUNTIME_SCENARIO_CANCELLED', message: 'Owned animation capture cancelled.' }); return true; } return false; };
-                    const capture = (type: string, eventState: unknown) => { if (settled || checkCancellation()) return; try { assertAnimation(); if (Date.now() >= args.expiresAt) { finish(); return; } if (eventState !== state) return; events.push({ sequence: events.length + 1, type, elapsedMs: clock.now() - start, clipName: clip.name, clipUuid: clip.uuid, state: snapshot() }); if (events.length >= (args.maxEvents ?? 20)) { reason = 'max-events'; finish(); } } catch (error) { abort(error); } };
+                    const capture = (type: string, eventState: unknown) => { if (settled || checkCancellation()) return; try { assertAnimation(); if (Date.now() >= eventDeadline) { finish(); return; } if (eventState !== state) return; events.push({ sequence: events.length + 1, type, elapsedMs: clock.now() - start, clipName: clip.name, clipUuid: clip.uuid, state: snapshot() }); if (events.length >= (args.maxEvents ?? 20)) { reason = 'max-events'; finish(); } } catch (error) { abort(error); } };
                     for (const type of ['play', 'pause', 'resume', 'stop', 'lastframe', 'finished']) { const callback: RuntimeCallback = (_type: unknown, eventState: unknown) => capture(type, eventState); listeners.push({ type, callback }); c.on!.call(c, type, callback); }
-                    timer = setTimeout(finish, Math.max(0, args.expiresAt - Date.now())); poll = setInterval(() => { if (settled || checkCancellation()) return; try { assertAnimation(); } catch (error) { abort(error); } }, 25);
+                    timer = setTimeout(finish, Math.max(0, eventDeadline - Date.now())); poll = setInterval(() => { if (settled || checkCancellation()) return; try { assertAnimation(); } catch (error) { abort(error); } }, 25);
                 });
                 assertAnimation(); return { ...animationIdentity, events, reason, elapsedMs: clock.now() - start, state: snapshot() };
                 } finally { clearTimeout(timer); clearInterval(poll); if (args.captureToken !== undefined) captures?.delete(args.captureToken); let cleanupFailed = false; for (const listener of listeners) { try { c.off!.call(c, listener.type, listener.callback); } catch { cleanupFailed = true; } } if (cleanupFailed) fail('RUNTIME_LISTENER_CLEANUP_FAILED', 'Animation listeners could not all be removed.'); }
@@ -246,31 +249,40 @@ async function componentOperation(args: ComponentOperation & { expiresAt: number
     } catch (error) { const known = error as { code?: string; message?: string }; return { code: known.code ?? 'RUNTIME_COMPONENT_FAILED', message: String(known.message ?? 'Component runtime operation failed.').slice(0, 512), mutationDispatched: mutated }; }
 }
 
-export function createComponentOperationSource(args: ComponentOperation): string {
+export function createComponentOperationSource(args: ComponentOperation, deadline?: number): string {
     const timeoutMs = args.timeoutMs ?? 1000;
-    const data = { skeletalEvents: args.skeletalEvents, captureToken: args.captureToken, kind: args.kind, operation: args.operation, nodeReference: { id: args.nodeReference.id }, componentId: args.componentId, clipName: args.clipName, clipUuid: args.clipUuid, maxEvents: args.maxEvents, maxClips: args.maxClips, clipOffset: args.clipOffset, expectedGraphUuid: args.expectedGraphUuid, variable: args.variable ? { name: args.variable.name, type: args.variable.type, value: args.variable.value, expectedValue: args.variable.expectedValue } : undefined, expiresAt: Date.now() + timeoutMs };
+    const data = { skeletalEvents: args.skeletalEvents, captureToken: args.captureToken, kind: args.kind, operation: args.operation, nodeReference: { id: args.nodeReference.id }, componentId: args.componentId, clipName: args.clipName, clipUuid: args.clipUuid, timeoutMs, maxEvents: args.maxEvents, maxClips: args.maxClips, clipOffset: args.clipOffset, expectedGraphUuid: args.expectedGraphUuid, variable: args.variable ? { name: args.variable.name, type: args.variable.type, value: args.variable.value, expectedValue: args.variable.expectedValue } : undefined, expiresAt: args.kind === 'events' ? deadline ?? Date.now() + timeoutMs + 2000 : Math.min(Date.now() + timeoutMs, deadline ?? Infinity) };
     return `(async () => { const token = ${JSON.stringify(args.captureToken ?? null)}; const key = Symbol.for('ccp3x.animationCaptures'); let captures; if (token !== null) { captures = globalThis[key] ?? (globalThis[key] = new Map()); if (!(captures instanceof Map) || captures.size >= 128 || captures.has(token)) return { code: 'RUNTIME_CAPTURE_LIMIT', message: 'Capture registry unavailable or full.' }; captures.set(token, false); } try { const requireDefined = ${requireDefined.toString()}; const finiteNumber = ${finiteNumber.toString()}; const objectValue = ${objectValue.toString()}; const resolveComponent = ${resolveComponent.toString()}; return await (${componentOperation.toString()})(${JSON.stringify(data)}); } finally { if (token !== null) captures.delete(token); } })()`;
 }
 
-export async function executeComponentOperation(args: ComponentOperation, assertActive?: () => void): Promise<Record<string, unknown>> {
+export async function executeComponentOperation(args: ComponentOperation, assertActive?: () => void, deadline?: number): Promise<Record<string, unknown>> {
     validateComponentTarget(args, args.kind !== 'particle');
     args = { ...args, nodeReference: { id: args.nodeReference.id }, ...(args.variable === undefined ? {} : { variable: { ...args.variable } }) };
     const boundedRead = args.kind !== 'events' && ['inspect', 'observe'].includes(args.operation);
-    const readDeadline = Date.now() + (args.timeoutMs ?? 1000);
+    const readDeadline = deadline ?? Date.now() + (args.timeoutMs ?? 1000);
+    const bounded = boundedRead || deadline !== undefined;
     assertActive?.();
-    const runtime = new RuntimeSessionTools(); const inspected = await runtime.runtimeSessionLifecycle({ operation: 'inspect', sessionId: args.sessionId, ...(boundedRead ? { timeoutMs: args.timeoutMs ?? 1000 } : {}) }); const session = inspected.session;
+    const readinessRemaining = readDeadline - Date.now();
+    if (bounded && readinessRemaining < 100) throw new ToolError({ code: 'RUNTIME_STATE_TIMEOUT', status: 409, message: 'Component deadline exhausted before readiness; no operation dispatched.' });
+    const runtime = new RuntimeSessionTools(); const inspected = await runtime.runtimeSessionLifecycle({ operation: 'inspect', sessionId: args.sessionId, ...(bounded ? { timeoutMs: readinessRemaining } : {}) }); const session = inspected.session;
     if (!session || !('status' in session) || !('targetId' in session) || !('targetKind' in session) || session.sessionId !== args.sessionId || session.status !== 'attached' || session.targetKind !== 'game-view' || typeof session.targetId !== 'string' || !inspected.ready) { if (session && 'status' in session && session.status === 'stopped') throw new ToolError({ code: 'RUNTIME_SESSION_STOPPED', status: 409, message: 'The runtime session is stopped.' }); throw new ToolError({ code: 'RUNTIME_NOT_READY', status: 409, message: 'The exact attached Game View session is not ready.' }); }
     assertActive?.();
     const mutation = args.kind !== 'events' && !['inspect', 'observe'].includes(args.operation);
     const readRemaining = readDeadline - Date.now();
-    if (boundedRead && readRemaining < 100) throw new ToolError({ code: 'RUNTIME_STATE_TIMEOUT', status: 409, message: 'Component observation budget exhausted during readiness; no read dispatched.' });
+    if (bounded && readRemaining < 100) throw new ToolError({ code: 'RUNTIME_STATE_TIMEOUT', status: 409, message: 'Component budget exhausted during readiness; no operation dispatched.', details: { mutationDispatched: false, retrySafe: true } });
+    // Keep the complete native capture window separate from caller completion time.
+    // Transport read-back and session verification each retain a bounded 250ms reserve.
+    const captureTimeout = args.timeoutMs ?? 1000;
+    if (args.kind === 'events' && deadline !== undefined && readRemaining < captureTimeout + 500) throw new ToolError({ code: 'RUNTIME_STATE_TIMEOUT', status: 409, message: 'Animation capture cannot fit its full window plus verification/completion reserve; no listeners registered.' });
     const captureToken = args.kind === 'events' && assertActive ? randomUUID() : undefined;
-    const captureDeadline = Date.now() + (args.timeoutMs ?? 1000);
+    const captureDeadline = args.kind === 'events' ? deadline === undefined ? Date.now() + captureTimeout + 2000 : deadline - 500 : Math.min(Date.now() + captureTimeout, deadline ?? Infinity);
     let cancellationPoll: NodeJS.Timeout | undefined; let signalling = false; let signalAttempts = 0;
     let pendingSignal: Promise<unknown> | undefined;
     let result: Record<string, unknown> | null;
     try {
-        const pending = executeGameViewOperation(session.targetId, createComponentOperationSource({ ...args, captureToken, ...(boundedRead ? { timeoutMs: readRemaining } : {}) }), boundedRead ? readRemaining : (args.timeoutMs ?? 1000) + 2000, mutation);
+        const transportDeadline = args.kind === 'events' && deadline !== undefined ? deadline - 250 : bounded ? readDeadline : undefined;
+        const transportTimeout = transportDeadline === undefined ? (args.timeoutMs ?? 1000) + 2000 : transportDeadline - Date.now();
+        const pending = executeGameViewOperation(session.targetId, createComponentOperationSource({ ...args, captureToken, timeoutMs: boundedRead ? readRemaining : captureTimeout }, captureDeadline), transportTimeout, mutation, transportDeadline, assertActive);
         if (captureToken !== undefined) cancellationPoll = setInterval(() => {
             if (signalling || signalAttempts >= 3) return;
             const remaining = captureDeadline - Date.now();
@@ -288,13 +300,13 @@ export async function executeComponentOperation(args: ComponentOperation, assert
     if (result.nodeUuid !== args.nodeReference.id || typeof result.componentId !== 'string' || !result.componentId || args.componentId !== undefined && result.componentId !== args.componentId) throw new ToolError({ code: 'INVALID_RUNTIME_RESPONSE', status: 502, message: 'Runtime component response does not identify the requested component.', details: { mutationDispatched: mutation, retrySafe: !mutation }, recovery: 'Inspect the exact component before further control; do not replay the prior mutation.' });
     if (args.clipName !== undefined && result.clipName !== args.clipName || args.clipUuid !== undefined && result.clipUuid !== args.clipUuid || args.expectedGraphUuid !== undefined && result.graphUuid !== args.expectedGraphUuid) throw new ToolError({ code: 'INVALID_RUNTIME_RESPONSE', status: 502, message: 'Runtime component asset identity differs from the requested clip or graph.', details: { mutationDispatched: mutation, retrySafe: !mutation }, recovery: 'Reconcile the exact component/asset before further control; do not replay the prior mutation.' });
     if (!mutation) assertActive?.();
-    if (boundedRead && readDeadline - Date.now() < 100) throw new ToolError({ code: 'RUNTIME_STATE_TIMEOUT', status: 409, message: 'Component observation has insufficient time for session verification; no recheck dispatched.' });
+    if (bounded && readDeadline - Date.now() < 100) throw new ToolError({ code: 'RUNTIME_STATE_TIMEOUT', status: 409, message: 'Component operation has insufficient time for session verification; no recheck dispatched.', details: { mutationDispatched: mutation, retrySafe: !mutation } });
     let after: Awaited<ReturnType<RuntimeSessionTools['runtimeSessionLifecycle']>>;
-    try { after = await runtime.runtimeSessionLifecycle({ operation: 'inspect', sessionId: args.sessionId, ...(boundedRead ? { timeoutMs: readDeadline - Date.now() } : {}) }); }
+    try { after = await runtime.runtimeSessionLifecycle({ operation: 'inspect', sessionId: args.sessionId, ...(bounded ? { timeoutMs: readDeadline - Date.now() } : {}) }); }
     catch (error) { throw new ToolError({ code: 'RUNTIME_COMPONENT_SESSION_RECHECK_FAILED', status: 502, message: 'Component operation settled but session continuity could not be confirmed.', details: { mutationDispatched: mutation, retrySafe: !mutation, cause: error instanceof ToolError ? error.code : 'SESSION_INSPECTION_FAILED' }, recovery: 'Reconcile the exact session/component before further control; do not replay the prior mutation.' }); }
     if (!mutation) assertActive?.();
     const afterSession = after.session;
     if (!after.ready || !afterSession || !('status' in afterSession) || !('targetId' in afterSession) || !('targetKind' in afterSession) || afterSession.status !== 'attached' || afterSession.sessionId !== session.sessionId || afterSession.targetId !== session.targetId || afterSession.targetKind !== session.targetKind || afterSession.createdAt !== session.createdAt) throw new ToolError({ code: 'RUNTIME_TARGET_CHANGED', status: 409, message: 'Runtime session identity changed during the component operation.', details: { mutationDispatched: mutation, retrySafe: !mutation } });
-    if (boundedRead && Date.now() >= readDeadline) throw new ToolError({ code: 'RUNTIME_STATE_TIMEOUT', status: 409, message: 'Component observation verification completed after its read deadline.' });
+    if (bounded && Date.now() >= readDeadline) throw new ToolError({ code: 'RUNTIME_STATE_TIMEOUT', status: 409, message: 'Component verification completed after its caller deadline.', details: { mutationDispatched: mutation, retrySafe: !mutation } });
     return { ...result, success: true, sessionId: session.sessionId, targetId: session.targetId, operation: args.operation, nodeReference: { id: args.nodeReference.id } };
 }

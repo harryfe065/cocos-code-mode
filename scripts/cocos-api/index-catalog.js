@@ -2,12 +2,16 @@
 'use strict';
 const { fs, path, compare, stable, hash, parseArgs } = require('./catalog-utils');
 const { TextDecoder } = require('node:util');
-const MAX_INDEX_BYTES = 32 * 1024 * 1024;
+const MAX_INDEX_BYTES = 1024 * 1024;
+const MAX_LOOKUP_BYTES = 32 * 1024 * 1024;
 const MAX_SHARD_BYTES = 8 * 1024 * 1024;
+const MAX_SHARDS = 1000;
+const MAX_SHARD_RECORDS = 10000;
 const MAX_RECORDS = 100000;
 const HELP = `Usage: node scripts/cocos-api/index-catalog.js --catalog-root <full-dir> --output <fresh-index-dir>
 Generates lookup.json and manifest.json; record shards remain in the original catalog root.
-Limits: 100000 records, 32MiB index/lookup, 8MiB per shard. Output parent must exist; output must not exist.
+Limits: 1MiB source index, 1000 shards, 10000 records/8MiB per shard, 100000 total records, 32MiB lookup.
+Output parent must exist; output must not exist.
 No source execution. No overwrites. lookup.json is published last; publication failure may leave an incomplete output.
 `;
 const isObject = value => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -56,12 +60,12 @@ function validateIndex(index) {
   if (!isObject(index) || index.schemaVersion !== 1
       || typeof index.version !== 'string' || !/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(index.version)
       || typeof index.catalogHash !== 'string' || !/^[a-f0-9]{64}$/.test(index.catalogHash)
-      || !Array.isArray(index.domains) || !index.domains.length || index.domains.length > MAX_RECORDS) throw new Error('Invalid catalog index schema, stable version, hash or domains.');
+      || !Array.isArray(index.domains) || !index.domains.length || index.domains.length > MAX_SHARDS) throw new Error('Invalid catalog index schema, stable version, hash or domains (maximum 1000 shards).');
   const files = new Set(['index.json', 'lookup.json', 'manifest.json']);
   let total = 0;
   for (const domain of index.domains) {
     if (!isObject(domain) || !isText(domain.name) || !Number.isSafeInteger(domain.count)
-        || domain.count < 1 || domain.count > MAX_RECORDS) throw new Error('Invalid catalog domain or record count.');
+        || domain.count < 1 || domain.count > MAX_SHARD_RECORDS) throw new Error('Invalid catalog domain or record count (maximum 10000 per shard).');
     guardFile(domain.file);
     const key = domain.file.toLowerCase();
     if (files.has(key)) throw new Error(`Duplicate or reserved catalog shard: ${domain.file}`);
@@ -129,7 +133,7 @@ function indexCatalog(catalogRoot, output) {
   entries.sort((a, b) => compare(a.id, b.id));
   const lookup = serialize({ schemaVersion: 1, version: index.version, catalogHash: index.catalogHash,
     sourceIndexSha256: sourceIndex.sha256, shards, entries });
-  if (lookup.length > MAX_INDEX_BYTES) throw new Error('Generated lookup exceeds 32MiB; no records are truncated.');
+  if (lookup.length > MAX_LOOKUP_BYTES) throw new Error('Generated lookup exceeds 32MiB; no records are truncated.');
   const manifest = { lookupSha256: hash(lookup), version: index.version, catalogHash: index.catalogHash,
     sourceIndexSha256: sourceIndex.sha256, recordCount, shardCount: shards.length };
   const staging = fs.mkdtempSync(path.join(parent, '.catalog-index-'));

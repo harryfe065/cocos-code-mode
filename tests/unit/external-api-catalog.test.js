@@ -14,7 +14,7 @@ function fixture() {
   fs.mkdirSync(path.join(root, '.ccp'));
   const catalog = path.join(root, 'catalog'); fs.mkdirSync(catalog);
   const lookupRoot = path.join(root, 'lookup'); fs.mkdirSync(lookupRoot);
-  const record = { id:'3.7.3:external:PhysicsSystem', version:'3.7.3', namespace:'engine-runtime', className:'PhysicsSystem', member:null, name:'PhysicsSystem', kind:'class', domain:'physics-framework', signatures:[], permitted:true };
+  const record = { id:'3.7.3:engine-runtime:PhysicsSystem', version:'3.7.3', namespace:'engine-runtime', className:'PhysicsSystem', member:null, name:'PhysicsSystem', kind:'class', domain:'physics-framework', signatures:[], permitted:true };
   const shard = Buffer.from(JSON.stringify({records:[record]}));
   fs.writeFileSync(path.join(catalog,'physics.json'),shard);
   const catalogHash='a'.repeat(64);

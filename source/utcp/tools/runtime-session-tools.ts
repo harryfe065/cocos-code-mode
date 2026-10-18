@@ -720,8 +720,16 @@ export class RuntimeSessionTools {
         const cancellation = new Promise<void>(resolve => { cancel = resolve; });
         const scenario = { cancelled: false, cancel, runId: args.runId ?? randomUUID(), stepIndex: null as number | null, operation: null as string | null, completedSteps: 0, requestPending: false, callerFinished: false };
         activeScenarios.set(args.sessionId, scenario);
-        const assertActive = () => { if (scenario.cancelled) throw new ToolError({ code: 'RUNTIME_SCENARIO_CANCELLED', status: 409, message: 'Scenario cancelled; no further polling read dispatched.' }); };
+        const assertActive = () => { if (scenario.cancelled) throw new ToolError({ code: 'RUNTIME_SCENARIO_CANCELLED', status: 409, message: 'Scenario cancelled; no further operation dispatched.' }); };
         let inFlight: Promise<unknown> | undefined;
+        const waitForSettlement = async (request: Promise<unknown>): Promise<void> => {
+            try { await request; }
+            catch (error) {
+                const native = error instanceof ToolError ? (error as ToolError & { pendingRequest?: Promise<unknown> }).pendingRequest : undefined;
+                // A rejected timeout wrapper is not completion of its queued renderer work.
+                if (native && native !== request) await waitForSettlement(native);
+            }
+        };
         try {
         const outcomes: Array<Record<string, unknown>> = [];
         for (let index = 0; index < steps.length; index++) {
@@ -731,7 +739,7 @@ export class RuntimeSessionTools {
             const remaining = Math.min(10000, scenarioDeadline - Date.now());
             if (!['assert', 'observe', 'audioObserve', 'audioAssert'].includes(step.operation) && remaining < 100) throw new ToolError({ code: 'RUNTIME_SCENARIO_TIMEOUT', status: 409, message: 'Scenario has insufficient remaining time for a bounded primitive; no next step dispatched.', details: { sessionId: args.sessionId, runId: scenario.runId, failedStep: index, outcomes } });
             try {
-                const stepDeadline = Math.min(scenarioDeadline, Date.now() + (step.timeoutMs ?? 10000));
+                const stepDeadline = Math.min(scenarioDeadline, Date.now() + (step.operation === 'animationEvents' ? (step.timeoutMs ?? 3000) + 2000 : step.timeoutMs ?? 10000));
                 scenario.stepIndex = index; scenario.operation = step.operation;
                 const delay = async (): Promise<Record<string, unknown>> => {
                     const start = Date.now(), end = start + step.durationMs!;
@@ -779,7 +787,7 @@ export class RuntimeSessionTools {
                                     if (scenario.cancelled) throw new ToolError({ code: 'RUNTIME_SCENARIO_CANCELLED', status: 409, message: 'Scenario cancelled before graph wait dispatch.' });
                                     const timeoutMs = Math.min(step.timeoutMs ?? (step.operation === 'graphWait' ? 10000 : 3000), stepDeadline - Date.now());
                                     if (timeoutMs < 100) throw new ToolError({ code: 'RUNTIME_SCENARIO_TIMEOUT', status: 409, message: 'Graph wait deadline elapsed before dispatch.' });
-                                    if (step.operation === 'graphSet') return new ComponentRuntimeTools().animationGraphPreview({ sessionId: args.sessionId, nodeReference: step.nodeReference!, componentId: step.componentId!, operation: 'setVariable', expectedGraphUuid: step.graphUuid!, variable: { name: step.variableName!, type: step.variableType!, value: step.variableValue!, expectedValue: step.expectedValue }, timeoutMs });
+                                    if (step.operation === 'graphSet') return new ComponentRuntimeTools().animationGraphPreview({ sessionId: args.sessionId, nodeReference: step.nodeReference!, componentId: step.componentId!, operation: 'setVariable', expectedGraphUuid: step.graphUuid!, variable: { name: step.variableName!, type: step.variableType!, value: step.variableValue!, expectedValue: step.expectedValue }, timeoutMs }, assertActive, stepDeadline);
                                     if (step.operation === 'graphObserve' || step.operation === 'graphAssert') {
                                         const result = await new ComponentRuntimeTools().animationGraphPreview({ sessionId: args.sessionId, nodeReference: step.nodeReference!, componentId: step.componentId!, operation: 'inspect', expectedGraphUuid: step.graphUuid!, timeoutMs });
                                         if (result.graphUuid !== step.graphUuid) throw new ToolError({ code: 'RUNTIME_TARGET_CHANGED', status: 409, message: 'Graph checkpoint identity changed.' });
@@ -805,7 +813,7 @@ export class RuntimeSessionTools {
                                         const result = await particles.particleWaitForState({ ...target, playing: step.playing, minParticleCount: step.minParticleCount, maxParticleCount: step.maxParticleCount }, assertActive);
                                         return { ...result, passed: result.matched === true };
                                     }
-                                    const result = await particles.particlePlayback({ ...target, operation: step.operation === 'particleControl' ? step.particleOperation! : 'inspect' });
+                                    const result = await particles.particlePlayback({ ...target, operation: step.operation === 'particleControl' ? step.particleOperation! : 'inspect' }, assertActive, step.operation === 'particleControl' ? stepDeadline : undefined);
                                     if (step.operation !== 'particleAssert') return result;
                                     const state = result.state as { playing?: unknown; particleCount?: unknown } | undefined;
                                     if (!state || typeof state.playing !== 'boolean' || typeof state.particleCount !== 'number' || !Number.isSafeInteger(state.particleCount) || state.particleCount < 0) throw new ToolError({ code: 'INVALID_RUNTIME_RESPONSE', status: 502, message: 'Particle assertion requires typed state/count metrics.' });
@@ -819,7 +827,7 @@ export class RuntimeSessionTools {
                                     const animation = new ComponentRuntimeTools();
                                     const target = { sessionId: args.sessionId, nodeReference: step.nodeReference!, componentId: step.componentId!, clipName: step.clipName!, clipUuid: step.clipUuid!, timeoutMs };
                                     if (step.operation === 'animationEvents') {
-                                        const capture = await animation.animationPlaybackEvents({ ...target, maxEvents: step.maxEvents }, assertActive);
+                                        const capture = await animation.animationPlaybackEvents({ ...target, timeoutMs: step.timeoutMs ?? 3000, maxEvents: step.maxEvents }, assertActive, stepDeadline);
                                         if (step.expectedEvent === undefined && step.expectedEventSequence === undefined) return capture;
                                         if (!Array.isArray(capture.events) || capture.events.length > (step.maxEvents ?? 20) || capture.events.findIndex((event, index) => !event || typeof event !== 'object' || Array.isArray(event) || !['play', 'pause', 'resume', 'stop', 'lastframe', 'finished'].includes(event.type) || event.clipUuid !== step.clipUuid || event.clipName !== step.clipName || event.sequence !== index + 1) >= 0) throw new ToolError({ code: 'INVALID_RUNTIME_RESPONSE', status: 502, message: 'Animation event checkpoint requires bounded sequential events for the exact requested clip.' });
                                         let previousElapsedMs = 0;
@@ -836,7 +844,7 @@ export class RuntimeSessionTools {
                                         for (const event of capture.events) if (event.type === step.expectedEvent) matchedEventCount++;
                                         return { ...capture, expectedEvent: step.expectedEvent, minEventCount: step.minEventCount ?? 1, matchedEventCount, passed: matchedEventCount >= (step.minEventCount ?? 1) };
                                     }
-                                    if (step.operation === 'animationControl') return animation.animationPlaybackControl({ ...target, operation: step.animationOperation! });
+                                    if (step.operation === 'animationControl') return animation.animationPlaybackControl({ ...target, operation: step.animationOperation! }, assertActive, stepDeadline);
                                     if (step.operation === 'animationWait') {
                                         const result = await animation.animationPlaybackWaitForState({ ...target, minDuration: step.minDuration, maxDuration: step.maxDuration, minSpeed: step.minSpeed, maxSpeed: step.maxSpeed, playing: step.playing, paused: step.paused, maxTime: step.maxTime, minTime: step.minTime }, assertActive);
                                         return { ...result, passed: result.matched === true };
@@ -856,7 +864,7 @@ export class RuntimeSessionTools {
                                     const target = { sessionId: args.sessionId, nodeReference: step.nodeReference!, expectedComponentUuid: step.expectedComponentUuid, expectedClipUuid: step.expectedClipUuid };
                                     const timeoutMs = Math.min(step.timeoutMs ?? (step.operation === 'audioControl' ? 5000 : 10000), stepDeadline - Date.now());
                                     if (Date.now() >= stepDeadline || (step.operation === 'audioControl' || step.operation === 'audioWait') && timeoutMs < 100) throw new ToolError({ code: 'RUNTIME_SCENARIO_TIMEOUT', status: 409, message: 'Audio step deadline elapsed before dispatch; no audio operation sent.' });
-                                    if (step.operation === 'audioControl') return audio.audioPlaybackControl({ ...target, operation: step.audioOperation!, time: step.time, timeoutMs });
+                                    if (step.operation === 'audioControl') return audio.audioPlaybackControl({ ...target, operation: step.audioOperation!, time: step.time, timeoutMs }, assertActive, stepDeadline);
                                     if (step.operation === 'audioWait') return audio.audioPlaybackWaitForState({ ...target, minDuration: step.minDuration, maxDuration: step.maxDuration, userActivation: step.userActivation, playing: step.playing, minVolume: step.minVolume, maxVolume: step.maxVolume, loop: step.loop, loaded: step.loaded, playbackState: step.playbackState, maxTime: step.maxTime, minTime: step.minTime, timeoutMs }, assertActive);
                                     const observation = await audio.audioPlaybackObserve(target);
                                     if (step.operation !== 'audioAssert') return observation;
@@ -868,21 +876,25 @@ export class RuntimeSessionTools {
                                     return { ...observation, passed: (step.minDuration === undefined || observation.state.duration >= step.minDuration) && (step.maxDuration === undefined || observation.state.duration <= step.maxDuration) && (step.userActivation === undefined || observation.state.userActivation === step.userActivation) && (step.minVolume === undefined || observation.state.volume! >= step.minVolume) && (step.maxVolume === undefined || observation.state.volume! <= step.maxVolume) && (step.loop === undefined || observation.state.loop === step.loop) && (step.playing === undefined || observation.state.playing === step.playing) && (step.loaded === undefined || observation.state.loaded === step.loaded) && (step.playbackState === undefined || observation.state.playbackState === step.playbackState) && (step.minTime === undefined || observation.state.currentTime >= step.minTime) && (step.maxTime === undefined || observation.state.currentTime <= step.maxTime) };
                                 })
                                 : this.previewControl({ sessionId: args.sessionId, operation: step.operation, timeoutMs: Math.min(step.timeoutMs ?? 10000, remaining) });
-                inFlight = pending;
                 scenario.requestPending = true;
-                void pending.then(() => { scenario.requestPending = false; }, () => { scenario.requestPending = false; });
+                const ownership: Promise<void> = waitForSettlement(pending).then(() => { if (inFlight === ownership) scenario.requestPending = false; });
+                inFlight = ownership;
                 const result: Record<string, unknown> = await withRuntimeStateTimeout<Record<string, unknown>>(Promise.race([pending as Promise<Record<string, unknown>>, cancellation.then(() => { throw new ToolError({ code: 'RUNTIME_SCENARIO_CANCELLED', status: 409, message: 'Scenario caller cancelled; pending primitive retains session ownership until settlement.', details: { nativeWorkCancelled: false, retrySafe: false, pendingMayComplete: scenario.requestPending } }); })]), stepDeadline);
                 inFlight = undefined;
+                scenario.requestPending = false;
                 if (Date.now() >= stepDeadline) throw new ToolError({ code: 'RUNTIME_SCENARIO_TIMEOUT', status: 409, message: 'Scenario step completed after its deadline; inspect before retrying any action.' });
                 outcomes.push({ index, operation: step.operation, result });
                 scenario.completedSteps = outcomes.length;
                 if (scenario.cancelled) throw new ToolError({ code: 'RUNTIME_SCENARIO_CANCELLED', status: 409, message: 'Scenario cancelled after the dispatched step settled; no subsequent step dispatched.' });
                 if ('passed' in result && result.passed !== true) throw new ToolError({ code: 'RUNTIME_SCENARIO_ASSERTION_FAILED', status: 409, message: `Runtime scenario assertion failed at step ${index}.` });
             } catch (error) {
-                throw new ToolError({ code: error instanceof ToolError ? error.code : 'RUNTIME_SCENARIO_FAILED', status: error instanceof ToolError ? error.status : 502,
+                const failure = new ToolError({ code: error instanceof ToolError ? error.code : 'RUNTIME_SCENARIO_FAILED', status: error instanceof ToolError ? error.status : 502,
                     message: error instanceof ToolError ? error.message : `Runtime scenario failed at step ${index}.`,
-                    details: { sessionId: args.sessionId, runId: scenario.runId, failedStep: index, outcomes, ...(error instanceof ToolError && error.details ? { cause: error.details } : {}) },
+                    details: { sessionId: args.sessionId, runId: scenario.runId, failedStep: index, outcomes, ...(['graphSet', 'particleControl', 'animationControl', 'audioControl', 'pause', 'resume', 'step'].includes(step.operation) && (!(error instanceof ToolError) || error.details?.retrySafe !== true) ? { retrySafe: false, pendingMayComplete: scenario.requestPending } : {}), ...(error instanceof ToolError && error.details ? { cause: error.details, ...(error.details.retrySafe === false ? { retrySafe: false } : {}) } : {}) },
                     recovery: error instanceof ToolError ? error.recovery : undefined });
+                const native = error instanceof ToolError ? (error as ToolError & { pendingRequest?: Promise<unknown> }).pendingRequest : undefined;
+                if (native) Object.defineProperty(failure, 'pendingRequest', { value: native });
+                throw failure;
             }
         }
         return { success: true, sessionId: args.sessionId, runId: scenario.runId, outcomes };

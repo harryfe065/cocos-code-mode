@@ -154,6 +154,8 @@ async function discoverWithinDeadline(args: EngineDiscoveryArgs, deadline: numbe
         return result;
     }
     if (args.compareVersion !== undefined || args.compareRecordId !== undefined) throw new ToolError({ code: 'INVALID_ARGUMENT', status: 400, message: 'Comparison selectors require compare_version.' });
+    const observesTarget = operation === 'records' || operation === 'get_signature';
+    if (args.reference && !observesTarget) throw new ToolError({ code: 'INVALID_ARGUMENT', status: 400, message: 'Catalog navigation does not accept an instance reference.' });
     if (operation !== 'records' && !['get_signature', 'get_related_types', 'list_members'].includes(operation) && (args.reference || args.recordId || args.category === 'component_schema' || args.className)) throw new ToolError({ code: 'INVALID_ARGUMENT', status: 400, message: 'Catalog navigation does not accept an instance, record or class schema target.' });
     if (operation === 'get_signature' && (typeof args.recordId !== 'string' || !args.recordId || args.recordId.length > 1024)) throw new ToolError({ code: 'INVALID_ARGUMENT', status: 400, message: 'get_signature requires a bounded exact recordId.' });
     if (args.recordId !== undefined && (typeof args.recordId !== 'string' || !args.recordId || args.recordId.length > 1024 || !['records', 'get_signature', 'get_related_types'].includes(operation))) throw new ToolError({ code: 'INVALID_ARGUMENT', status: 400, message: 'recordId requires a record operation and a bounded nonempty identity.' });
@@ -325,6 +327,7 @@ async function discoverWithinDeadline(args: EngineDiscoveryArgs, deadline: numbe
                     if (!signature || typeof signature !== 'object' || Array.isArray(signature)) throw new ToolError({ code: 'CATALOG_INVALID', status: 502, message: 'Declaration signature metadata is malformed.' });
                     const row = signature as Record<string, unknown>;
                     collect(row.references, 'declaration.signature.references', { signatureIndex });
+                    collect(row.parameterReferences, 'declaration.signature.parameterReferences', { signatureIndex });
                     collect(row.returnReferences, 'declaration.signature.returnReferences', { signatureIndex });
                     collect(row.unresolved, 'declaration.signature.unresolved', { signatureIndex });
                     collectSignatureTypes(row, 'declaration.signature', signatureIndex);
@@ -351,6 +354,7 @@ async function discoverWithinDeadline(args: EngineDiscoveryArgs, deadline: numbe
                 if (!signature || typeof signature !== 'object' || Array.isArray(signature)) throw new ToolError({ code: 'CATALOG_INVALID', status: 502, message: 'Record signature metadata is malformed.' });
                 const row = signature as Record<string, unknown>;
                 collect(row.references, 'signature.references', { signatureIndex }); collect(row.returnReferences, 'signature.returnReferences', { signatureIndex }); collect(row.unresolved, 'signature.unresolved', { signatureIndex });
+                collect(row.parameterReferences, 'signature.parameterReferences', { signatureIndex });
                 collectSignatureTypes(row, 'signature', signatureIndex);
                 if (Array.isArray(row.parameters)) reserveContainers(row.parameters.length);
                 if (Array.isArray(row.parameters)) for (const [parameterIndex, parameter] of row.parameters.entries()) {
@@ -430,7 +434,7 @@ async function discoverWithinDeadline(args: EngineDiscoveryArgs, deadline: numbe
     if (args.className && records.length === 0 && !matchedCatalogTarget && operation !== 'get_related_types') throw new ToolError({ code: 'TARGET_NOT_FOUND', status: 404, message: `Class ${args.className} is absent from the ${version} catalog.` });
     if (args.recordId !== undefined && records.length === 0 && operation !== 'get_related_types') throw new ToolError({ code: 'TARGET_NOT_FOUND', status: 404, message: 'Record is absent from the selected catalog scope/version/filters.' });
     let live: Record<string, unknown> = { checked: false, context: 'edit-scene', available: null, writablePaths: [], mutationAuthorized: false };
-    if (args.className && engineClassTarget && version === '3.7.3' && !args.reference) {
+    if (observesTarget && args.className && engineClassTarget && version === '3.7.3' && !args.reference) {
         try {
             const availability = z.object({ available: z.boolean(), className: z.string(), engineVersion: z.string().nullable(), context: z.literal('edit-scene') }).parse(await observeWithinDeadline(() => Editor.Message.request('scene', 'execute-scene-script', { name: 'ccp3x', method: 'engineApiClassAvailability', args: [{ className: args.className }] })));
             if (availability.className.replace(/^cc\./, '') !== args.className.replace(/^cc\./, '')) throw new ToolError({ code: 'TYPE_MISMATCH', status: 422, message: 'Availability probe returned a different class identity.' });

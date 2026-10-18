@@ -58,7 +58,7 @@ export class P4ContractTools {
         },
         required: ['sessionId', 'operation', 'nodeReference'],
     }, { type: 'object', properties: { success: { type: 'boolean' }, sessionId: { type: 'string' }, targetId: { type: 'string' }, operation: { type: 'string' }, nodeReference: {}, nodeUuid: { type: 'string' }, componentId: { type: 'string' }, state: {} }, required: ['success', 'sessionId', 'targetId', 'operation', 'nodeReference', 'nodeUuid', 'componentId', 'state'] }, 'POST', ['particle', 'playback', 'runtime'])
-    async particlePlayback(args: { sessionId?: string, operation?: string, nodeReference?: { id?: string }, componentId?: string, timeoutMs?: number }): Promise<Record<string, unknown>> {
+    async particlePlayback(args: { sessionId?: string, operation?: string, nodeReference?: { id?: string }, componentId?: string, timeoutMs?: number }, assertActive?: () => void, deadline?: number): Promise<Record<string, unknown>> {
         const sessionId = requireText(args?.sessionId, 'sessionId', 64);
         const nodeId = requireText(args?.nodeReference?.id, 'nodeReference.id');
         if (!['play', 'stop', 'clear', 'inspect'].includes(String(args.operation))) {
@@ -66,7 +66,7 @@ export class P4ContractTools {
         }
         if (args.componentId !== undefined) requireText(args.componentId, 'componentId');
         if (args.timeoutMs !== undefined && (!Number.isInteger(args.timeoutMs) || args.timeoutMs < 100 || args.timeoutMs > 3000)) throw new ToolError({ code: 'INVALID_ARGUMENT', status: 400, message: 'timeoutMs must be an integer from 100 to 3000.' });
-        return executeComponentOperation({ kind: 'particle', operation: String(args.operation), sessionId, nodeReference: { id: nodeId }, componentId: args.componentId, timeoutMs: args.timeoutMs ?? 1000 });
+        return executeComponentOperation({ kind: 'particle', operation: String(args.operation), sessionId, nodeReference: { id: nodeId }, componentId: args.componentId, timeoutMs: args.timeoutMs ?? 1000 }, assertActive, deadline);
     }
 
     @utcpTool('particleWaitForState', 'Observe one exact Game View ParticleSystem until playing/count conditions match or the deadline expires. Read-only: never calls play/stop/clear. Exact componentId required; invalidated sessions fail closed.', {

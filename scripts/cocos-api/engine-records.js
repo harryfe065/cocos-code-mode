@@ -12,6 +12,11 @@ function kind(node) {
   if (ts.isGetAccessorDeclaration(node) || ts.isSetAccessorDeclaration(node)) return 'accessor';
   return 'property';
 }
+function classExpression(node) {
+  let initializer = ts.isVariableDeclaration(node) ? node.initializer : undefined;
+  while (initializer && (ts.isParenthesizedExpression(initializer) || ts.isAsExpression(initializer) || ts.isTypeAssertionExpression(initializer) || ts.isNonNullExpression(initializer) || ts.isSatisfiesExpression(initializer))) initializer = initializer.expression;
+  return initializer && ts.isClassExpression(initializer) ? initializer : null;
+}
 function collectExports(input, version, roots, label = 'engine') {
   const records = new Map();
   const unknowns = [];
@@ -48,7 +53,7 @@ function collectExports(input, version, roots, label = 'engine') {
     } else sigs = signatures(checker, symbol, declaration);
     const diagnostics = sigs.flatMap(signature => signature.unresolved);
     const inheritedName = inheritedFrom?.name?.getText() || null;
-    const owner = member ? memberOwner : ts.isVariableDeclaration(declaration) && declaration.initializer && ts.isClassExpression(declaration.initializer) ? declaration.initializer : declaration;
+    const owner = member ? memberOwner : classExpression(declaration) || declaration;
     const ownerSymbol = owner.name && checker.getSymbolAtLocation(owner.name);
     const mergedOwners = ownerSymbol?.declarations?.filter(part => ts.isInterfaceDeclaration(part) || ts.isClassDeclaration(part) || ts.isClassExpression(part));
     const owners = mergedOwners?.length ? mergedOwners : [owner];
@@ -87,6 +92,9 @@ function collectExports(input, version, roots, label = 'engine') {
     if (!symbol?.declarations?.length) { unknowns.push({ namespace: context.namespace, module: context.module, name, kind: 'export', reference: exported.name, path: context.exportPath, reason: 'Unresolved export alias or declaration' }); return; }
     if (ancestors.has(symbol)) return;
     const declaration = symbol.valueDeclaration || symbol.declarations[0];
+    const expression = classExpression(declaration);
+    const classSymbol = expression ? checker.getTypeAtLocation(expression).symbol : symbol;
+    const classDeclarations = expression ? [expression] : symbol.declarations;
     const declaredKind = kind(declaration);
     const exportMetadata = [];
     if (exported !== symbol) for (const part of exported.declarations || []) {
@@ -94,18 +102,19 @@ function collectExports(input, version, roots, label = 'engine') {
       if (ts.isExportSpecifier(part) && ts.isExportDeclaration(part.parent?.parent)) exportMetadata.push(metadata(part.parent.parent));
       if (ts.isNamespaceExport(part) && ts.isExportDeclaration(part.parent)) exportMetadata.push(metadata(part.parent));
     }
-    const internal = symbol.declarations.some(part => metadata(part).internal) || exportMetadata.some(item => item.internal);
-    const deprecated = !!context.deprecated || symbol.declarations.some(part => metadata(part).deprecated) || exportMetadata.some(item => item.deprecated);
+    const classMetadata = expression ? metadata(expression) : null;
+    const internal = symbol.declarations.some(part => metadata(part).internal) || !!classMetadata?.internal || exportMetadata.some(item => item.internal);
+    const deprecated = !!context.deprecated || symbol.declarations.some(part => metadata(part).deprecated) || !!classMetadata?.deprecated || exportMetadata.some(item => item.deprecated);
     const local = { ...context, deprecated, publicExport: context.publicExport && !internal && !/^__private(?:\.|$)/.test(name) };
     record(symbol, declaration, local, name, null);
     if (declaredKind === 'namespace' || symbol.flags & ts.SymbolFlags.Module) {
       const next = new Set([...ancestors, symbol]);
       for (const child of checker.getExportsOfModule(symbol).sort((a, b) => compare(a.name, b.name))) visit(child, local, name, next);
     }
-    if (declaredKind === 'class' || declaredKind === 'interface') {
-      const instance = checker.getDeclaredTypeOfSymbol(symbol);
+    if (declaredKind === 'class' || declaredKind === 'interface' || expression) {
+      const instance = checker.getDeclaredTypeOfSymbol(classSymbol);
       const members = new Map(checker.getPropertiesOfType(instance).map(item => [item.name, item]));
-      for (const declared of symbol.declarations) for (const member of declared.members || []) {
+      for (const declared of classDeclarations) for (const member of declared.members || []) {
         const memberSymbol = member.name && checker.getSymbolAtLocation(member.name);
         if (memberSymbol && !(ts.getCombinedModifierFlags(member) & ts.ModifierFlags.Static)) members.set(memberSymbol.name, memberSymbol);
       }
@@ -113,14 +122,14 @@ function collectExports(input, version, roots, label = 'engine') {
         const decl = child.valueDeclaration || child.declarations?.[0];
         if (decl) {
           const owner = ts.isParameter(decl) && ts.isConstructorDeclaration(decl.parent) ? decl.parent.parent : decl.parent;
-          record(child, decl, local, name, child.name, !symbol.declarations.includes(owner) ? owner : null);
+          record(child, decl, local, name, child.name, !classDeclarations.includes(owner) ? owner : null);
         }
       }
       if (symbol.valueDeclaration) {
         const constructor = checker.getTypeOfSymbolAtLocation(symbol, declaration);
         for (const child of checker.getPropertiesOfType(constructor).sort((a, b) => compare(a.name, b.name))) {
           const decl = child.valueDeclaration || child.declarations?.[0];
-          if (decl && ts.getCombinedModifierFlags(decl) & ts.ModifierFlags.Static) record(child, decl, local, name, child.name, !symbol.declarations.includes(decl.parent) ? decl.parent : null);
+          if (decl && ts.getCombinedModifierFlags(decl) & ts.ModifierFlags.Static) record(child, decl, local, name, child.name, !classDeclarations.includes(decl.parent) ? decl.parent : null);
         }
       }
       const baseTypes = checker.getBaseTypes(instance) || [];

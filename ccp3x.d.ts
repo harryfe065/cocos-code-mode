@@ -1383,19 +1383,21 @@ declare namespace ccp3x {
     function uiCreateScrollView(args?: { name?: string; parentReference?: InstanceReference }): {
         reference: InstanceReference; viewport: InstanceReference; content: InstanceReference;
     };
-    /** Creates a separate static list window with child-membership readback, not runtime virtualization. nextIndex is metadata, not continuation. UI_LIST_CREATE_PARTIAL retains acknowledged root/item IDs and pending index with retrySafe:false; inspect before another create, no automatic cleanup. */
+    /** Creates a fixed-height vertical numeric-label list with visibleItems+1 bounded pool, scroll recycling and a generated project script/component. startIndex clamps to a full visible window. Requires native script import/registration. Scene is not automatically saved. Installation is not runtime/persistence qualification; partial failures retain owned identities without blind cleanup/replay. */
     function uiVirtualListCreate(args: { name?: string; parentReference?: InstanceReference; itemCount: number; visibleItems: number; startIndex?: number }): {
         reference: InstanceReference; viewport: InstanceReference; content: InstanceReference; itemReferences: InstanceReference[];
-        itemCount: number; instantiatedItems: number; startIndex: number; nextIndex: number | null; virtualized: false; runtimeRecyclingBound: false;
+        itemCount: number; instantiatedItems: number; startIndex: number; nextIndex: number | null; virtualized: true; runtimeRecyclingBound: true;
+        runtimeVerified: false; runtimeBinding: { scriptReference: InstanceReference; componentReference: InstanceReference; runtimeVerified: false };
     };
     /** Creates a bounded labeled EditBox + Submit Button form under one Widget root. Verifies all three child identities and focus order; failure reports owned-root cleanup status. Does not bind a gameplay callback or prove runtime input dispatch. */
     function uiCreateInputForm(args: { label: string; placeholder?: string; name?: string; parentReference?: InstanceReference }): {
         reference: InstanceReference; label: InstanceReference; input: InstanceReference; submit: InstanceReference; focusOrder: string[];
     };
-    /** Creates a form and rule metadata only. No runtime validator, submit interception or gameplay callback is installed. */
+    /** Generates/imports a project script and installs required/minLength validation on the owned form; text changes gate Submit Button.interactable. No gameplay submit callback or automatic scene save. Installation/readback is not runtime qualification. */
     function uiFormValidationBind(args: { label: string; placeholder?: string; required?: boolean; minLength?: number; name?: string; parentReference?: InstanceReference }): {
         form: { reference: InstanceReference; label: InstanceReference; input: InstanceReference; submit: InstanceReference; focusOrder: string[] };
-        rules: { required: boolean; minLength: number; inputReference: InstanceReference }; focusOrder: string[]; runtimeValidationBound: false;
+        rules: { required: boolean; minLength: number; inputReference: InstanceReference }; focusOrder: string[]; runtimeValidationBound: true;
+        runtimeVerified: false; runtimeBinding: { scriptReference: InstanceReference; componentReference: InstanceReference; runtimeVerified: false };
     };
     /** Read-only bounded live 2D UI layout diagnostics. Optional overlay returns a transient bounded PNG payload and never mutates scene state. */
     function uiLayoutReport(args: {

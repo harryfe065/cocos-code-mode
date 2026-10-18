@@ -7,6 +7,14 @@
 
 Approve/review implemented source independently from testing. Existing test outputs remain recorded historical evidence; every future verification/re-verification task stays pending for a separately scheduled pass. No test execution, live mutation, qualification promotion, publish readiness or release closure is authorized by this review decision.
 
+### Breadth-freeze reconciliation — 2026-10-18
+
+- [x] Current API expansion source stabilization completed in `b5800154`: all review findings fixed; integrated build/Creator-load and full unit897/897 pass. Current offline portfolio/workflow/authoring audits pass (368 registered, approvals70/82, readiness:false, authoring228/247).
+- [x] Separate current source completion from historical release and future re-entry checklists. Unchecked rows below cover exact native/clean-artifact/protected qualification or future lanes; they are not outstanding authorization to add API breadth.
+- [x] Keep frozen parent pending/HOLD and thresholds unchanged. Canonical current implementation/qualification split: `G:/_devtools/cfg-n-scripts/notes/plans/cc-code-mode-cst/1-wip-261015__tbd-parallel-api-capability-expansion/plan.md`.
+
+The final-artifact `commit/builtAt`, native persistence/restart/cleanup and signing/release checks remain unchecked until actually exercised. Passing local build/unit/audits does not complete those compound requirements or replace historical witnesses.
+
 #### Implemented and accepted for source review
 
 - [x] `buildSettingsManage`: allowlisted builder defaults/cache preferences with guarded writes/read-back/rollback logic.

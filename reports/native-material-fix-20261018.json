@@ -1,0 +1,116 @@
+{
+  "date": "2026-10-18",
+  "creator": "3.8.8",
+  "project": "G:/_ws/_helpers/cc-minimal-388",
+  "artifact": {
+    "commit": "b5800154",
+    "dirty": true,
+    "builtAt": "2026-10-18T06:32:02.463Z",
+    "sourceHashes": {
+      "source/utcp/utils/asset-importers/material-importer.ts": "18e1b0df375c672d2ff43b0292ea04d318555d124c483a367b7d92401e087408",
+      "source/utcp/tools/material-tools.ts": "e35c0b15d2feb42eb9fdeb38d74b45fb14e1a999cb52b7338979cb1c2819d57d"
+    }
+  },
+  "material": {
+    "rootCause": "Scene applyMaterial facade drops promise; native import precedes asynchronous cache reload.",
+    "fix": "Preview/apply once; wait matching import <=5s and read-only cache convergence <=3s. Uncertain completion refuses without rollback.",
+    "fixture": "00636231-158a-4a0a-a907-91b03f6a49a8",
+    "color": {
+      "r": 45,
+      "g": 90,
+      "b": 135,
+      "a": 255
+    },
+    "nativeQueryMatched": true,
+    "sourceMtlMatched": true,
+    "reopenPersistenceMatched": true,
+    "reopenInstance": "e44f2f901ecc95455742f0a700c5c5f3",
+    "restoredWhite": true,
+    "restorationUnaffectedPassesUnchanged": true,
+    "defaultSerialization": "Native source elides default mainColor after restoring white.",
+    "limits": "One builtin-standard color fixture; not general qualification or3.7 live proof."
+  },
+  "preview": {
+    "status": "blocked",
+    "sourceChanged": false,
+    "evidence": {
+      "schemaVersion": 1,
+      "creatorVersion": "3.8.8",
+      "projectPath": "G:/_ws/_helpers/cc-minimal-388",
+      "instanceId": "0ed4305aee43621bcb98954a433c6ce4",
+      "observedBridgeBuild": "af514a7-dirty",
+      "method": "Read-only inspection of installed app.asar package contracts and actual loaded native function bodies via owned main renderer webContents1; no setter, profile, browser or scene mutation dispatched.",
+      "rootCause": "preview/package.json declares neither set-resolution nor query-config. Existing previewResolutionSet cannot use those messages on this stock version.",
+      "nativeUi": {
+        "module": "C:\\ProgramData\\cocos\\editors\\Creator\\3.8.8\\resources\\app.asar\\builtin\\scene\\dist\\engine-view\\plugin\\toolbar\\game-view.ccc",
+        "handleOnDevice": "async handleOnDevice(i){var e;\"i18n:scene.game_view.edit\"===i?Editor.Message.request(\"preferences\",\"open-settings\",\"device\"):(e=this.devicesList.filter(e=>e.name===i)[0],e={name:i,type:e?.type||\"device\",width:e?.width||0,height:e?.height||0},this.gameViewData.devicesInfo=e,await Editor.Profile.setConfig(\"scene\",\"game-view.devicesInfo\",e),this.visible&&(e=await this.requestStyleChange(),this.gameViewData.fullScreen)&&this.scaleToSlider(e.scale))}",
+        "requestStyleChange": "async requestStyleChange(){var e=this.isNative?\"editor-preview-change-style-native\":\"editor-preview-change-style-web\",e=await Editor.Message.request(\"scene\",e);if(null==e)throw new Error(`Invalid style changed return value:${e}, please ensure GameView is activated`);return e}",
+        "queryDevices": "async queryDevices(){var e=await Editor.Message.request(\"device\",\"query\"),i=await Editor.Message.request(\"project\",\"query-design-resolution\"),e=(this.devicesList=[],e.map(e=>({label:`${e.name} (${e.width}x${e.height})`,name:e.name,width:e.width,height:e.height}))),t=[{label:\"\"+Editor.I18n.t(\"scene.game_view.free_aspect\"),type:\"free\",name:\"i18n:scene.game_view.free_aspect\"},{label:\"16:9\",type:\"ratio\",width:16,height:9,name:\"16:9\"},{label:\"16:10\",type:\"ratio\",width:16,height:10,name:\"16:10\"}];this.isNative||t.push({label:`${Editor.I18n.t(\"scene.game_view.design_resolution\")} (${i.width}x${i.height})`,type:\"design\",width:i?.width,height:i?.height,name:\"i18n:scene.game_view.design_resolution\"},{name:\"__separator__\"},...e,{name:\"__separator__\"},{label:Editor.I18n.t(\"scene.game_view.edit\"),type:\"edit\",name:\"i18n:scene.game_view.edit\"}),this.devicesList=t}",
+        "generalDesignResolutionChanged": "generalDesignResolutionChanged(e,i,t,a){\"project\"===e&&i.includes(\"project\")&&t.includes(\"general.designResolution\")&&this.onDevicesChanged()}"
+      },
+      "nativeStyle": {
+        "module": "builtin/scene/dist/engine-view/views/web/engine-view.ccc",
+        "previewUpdateStyle": "async previewUpdateStyle(){var e=await this._gameViewService.getGameViewData();if(await this._gameViewService.showGameView())return device_adapter_1.WebAdapter.reset(this.offsetWidth,this.offsetHeight),this.previewClient.updateStyle(e)}",
+        "previewUpdateConfig": "async previewUpdateConfig(){var{fps:e,stats:i}=await this._gameViewService.getGameViewData();await this.callSceneMethod(\"callPreviewPlayMethod\",[\"setFps\",e]),await this.callSceneMethod(\"callPreviewPlayMethod\",[\"showState\",i])}",
+        "previewClientUpdateStyle": "async updateStyle(e){var{rotate:e,scaleValue:t,devicesInfo:i,fullScreen:s}=e;let r=i.width,a=i.height;\"ratio\"===i.type?(d=device_adapter_1.WebAdapter.ratioToSize(r,a),r=d.width,a=d.height):\"design\"===i.type?(d=await Editor.Profile.getProject(\"project\",\"general.designResolution\"),r=d.width,a=d.height):\"free\"===i.type&&(r=device_adapter_1.WebAdapter.screenWidth*window.devicePixelRatio,a=device_adapter_1.WebAdapter.screenHeight*window.devicePixelRatio),device_adapter_1.WebAdapter.fitScreen(r,a,s,e,t/100);var d=Math.floor(device_adapter_1.WebAdapter.width),i=Math.floor(device_adapter_1.WebAdapter.height);return this.webview.setAttribute(\"update-style\",\"\"),this._resizeDebounce(d,i),{scale:Math.floor(100*device_adapter_1.WebAdapter.scale)}}",
+        "previewClientSetSize": "setSize(e,t){this._loaded&&this.webview.hasAttribute(\"update-style\")&&(this.webview.setAttribute(\"style\",`width:${e}px; height:${t}px;`),this.webview.removeAttribute(\"update-style\"),requestAnimationFrame(()=>{device_adapter_1.WebAdapter.offsetX=this.webview.offsetLeft,device_adapter_1.WebAdapter.offsetY=this.webview.offsetTop}),this.webview.parentElement)&&(this.webview.parentElement.setAttribute(\"game-view\",\"\"),this.webview.parentElement.addEventListener(\"wheel\",this.preventWheelScroll))}"
+      },
+      "messageHandlers": {
+        "module": "builtin/scene/dist/panel/message/operation.ccc",
+        "style": "e[\"editor-preview-change-style\"]=async()=>{if($scene)return $scene.previewUpdateStyle?.()}",
+        "config": "e[\"editor-preview-change-config\"]=async()=>{$scene&&await $scene.previewUpdateConfig?.()}"
+      },
+      "readback": {
+        "module": "builtin/scene/dist/engine-view/plugin/toolbar/engine-view.ccc",
+        "getGameViewData": "getGameViewData(){var e=this.$refs.gameViewToolbar;if(e)return{...e.gameViewData};throw new Error('template \"gameViewToolbar\" not found. please check it')}",
+        "observedToolbarData": {
+          "devicesInfo": {
+            "name": "i18n:scene.game_view.design_resolution",
+            "width": 0,
+            "height": 0,
+            "type": "design"
+          },
+          "scaleValue": 100,
+          "sliderValue": 50,
+          "scaleMin": 10,
+          "scaleMax": 400,
+          "rotate": false,
+          "fullScreen": false,
+          "fps": 60,
+          "stats": false
+        },
+        "showGameView": false,
+        "profileGameViewPresent": false,
+        "profileDevicesInfoPresent": false
+      },
+      "context": {
+        "webContentsId": 8,
+        "platform": "gameView",
+        "enabled": false,
+        "ready": true,
+        "loaded": true,
+        "failed": false,
+        "webviewStyle": "display:none"
+      },
+      "conclusion": "No message-callable exact-resolution setter was found. Native UI handler updates live Vue toolbar device state, then Profile, then requests style reflow. Profile-only+style is not the same route: style reflow reads Vue state, not Profile; config message accepts no arguments and applies only FPS/stats. Arbitrary renderer/debugger production coupling and browser/runtime design-resolution substitutes were excluded by Main.",
+      "missingPrerequisite": "A supported message/Panel method that sets live toolbar device state (or separately approved bounded native UI adapter), plus loaded enabled visible actual web Game View, baseline including absent profile config, actual viewport dimensions after120ms debounce/DPR/rotate/scale handling, and restoration of live and persisted state.",
+      "decision": "Leave original previewResolutionSet and regression unchanged per Main direction. Stock3.8.8 remains unsupported; no qualification or successful set/readback/restoration claim.",
+      "validation": "No tests/build/lint/formatter run; Main owns validation. No valid-set/mismatch regression added because no accepted setter seam exists."
+    }
+  },
+  "verification": {
+    "build": "PASS",
+    "materialContractTests": "10 passed",
+    "fullSuiteRun": false
+  },
+  "cleanup": {
+    "fixtureDeleted": true,
+    "assetQueryTotal": 0,
+    "sceneDirty": false,
+    "sceneNodes": 3,
+    "ownedCreatorStopped": true,
+    "distBackup": "G:/_ws/_helpers/cc-minimal-388/extensions/ccp3x/dist.native-fix-backup-1792305147184"
+  },
+  "promotion": false,
+  "release": false
+}

@@ -258,9 +258,66 @@ export class MaterialImporter extends BaseAssetImporter {
     isRestored(before: unknown, restored: unknown): boolean { return materialEqual(before, restored); }
 
     async applyDump(uuid: string, dump: unknown): Promise<void> {
-        // Creator 3.7 Inspector uses the positional (uuid, materialDump) save signature.
-        await Editor.Message.request('scene', 'apply-material', uuid, dump);
-        Editor.Message.broadcast('material-inspector:change-dump');
+        const messages = Editor.Message as typeof Editor.Message & {
+            addBroadcastListener?: (topic: string, listener: (uuid: string, info: unknown) => void) => void;
+            removeBroadcastListener?: (topic: string, listener: (uuid: string, info: unknown) => void) => void;
+        };
+        if (typeof messages.addBroadcastListener !== 'function' || typeof messages.removeBroadcastListener !== 'function') throw new ToolError({ code: 'UNSUPPORTED_BROADCAST_IPC', status: 422, message: 'Material save requires Creator asset import completion broadcasts.' });
+        let complete!: (info: Record<string, unknown>) => void;
+        const imported = new Promise<Record<string, unknown>>(resolve => { complete = resolve; });
+        let dispatched = false;
+        let active = true;
+        const onChanged = (id: string, info: unknown): void => {
+            if (!active || !dispatched || id !== uuid || !info || typeof info !== 'object') return;
+            const asset = objectSchema.parse(info);
+            if (asset.uuid === uuid && asset.imported === true) complete(asset);
+        };
+        let timer: NodeJS.Timeout | undefined;
+        messages.addBroadcastListener('asset-db:asset-change', onChanged);
+        try {
+            await Promise.race([
+                (async () => {
+                    // Both stock 3.7/3.8 Inspectors preview before applying. The facade drops
+                    // applyMaterial's promise, so its IPC reply is not a save/import barrier.
+                    await messages.request('scene', 'preview-material', uuid, dump, { emit: true });
+                    if (!active) return;
+                    dispatched = true;
+                    await messages.request('scene', 'apply-material', uuid, dump);
+                    const info = await imported;
+                    if (info.invalid !== false || info.importer !== 'material') throw new ToolError({ code: 'MATERIAL_IMPORT_FAILED', status: 502, message: 'Creator completed the material import without a valid material asset.' });
+                })(),
+                new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('Material import completion deadline exceeded.')), 5000); }),
+            ]);
+        } catch (error) {
+            if (error instanceof ToolError && error.code === 'MATERIAL_IMPORT_FAILED') throw error;
+            // A missing reply/event does not cancel the native save. Never race it with
+            // another write, including an automatic restoration of the previous dump.
+            throw new ToolError({ code: 'MATERIAL_MUTATION_OUTCOME_UNKNOWN', status: 504, message: 'Material preview/save did not reach confirmed import completion; no restoration was dispatched.', details: { retrySafe: false, restored: null, cause: String(error) } });
+        } finally {
+            active = false;
+            clearTimeout(timer);
+            messages.removeBroadcastListener('asset-db:asset-change', onChanged);
+        }
+        messages.broadcast('material-inspector:change-dump');
+    }
+
+    async readBack(uuid: string, matches: (dump: unknown) => boolean): Promise<unknown> {
+        // Asset change is emitted before the scene's asynchronous cached asset reload.
+        // Only reads are repeated; a save is never retried to make read-back converge.
+        const deadline = Date.now() + 3000;
+        let last: unknown;
+        for (let attempt = 0; attempt < 31; attempt++) {
+            let timer: NodeJS.Timeout | undefined;
+            try {
+                last = await Promise.race([
+                    Editor.Message.request('scene', 'query-material', uuid),
+                    new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new ToolError({ code: 'MATERIAL_READBACK_TIMEOUT', status: 504, message: 'Material read-back exceeded its bounded cache reload deadline.' })), Math.max(1, deadline - Date.now())); }),
+                ]);
+            } finally { clearTimeout(timer); }
+            if (matches(last) || Date.now() >= deadline || attempt === 30) return last;
+            await new Promise<void>(resolve => setTimeout(resolve, Math.min(100, Math.max(0, deadline - Date.now()))));
+        }
+        return last;
     }
 
     async setProperty(assetInfo: IAssetInfo, path: string, value: unknown): Promise<boolean> {
@@ -268,15 +325,22 @@ export class MaterialImporter extends BaseAssetImporter {
         if (!plan) return false;
         try {
             await this.applyDump(assetInfo.uuid, plan.dump);
-            const verified = this.verifyEdit(plan, await Editor.Message.request('scene', 'query-material', assetInfo.uuid));
+            const verified = this.verifyEdit(plan, await this.readBack(assetInfo.uuid, after => {
+                const result = this.verifyEdit(plan, after);
+                return result.requestedValueMatched && result.unaffectedPassesUnchanged;
+            }));
             if (!verified.requestedValueMatched || !verified.unaffectedPassesUnchanged) throw new ToolError({ code: 'READBACK_MISMATCH', status: 502, message: 'Material requested value or unaffected pass read-back mismatch.', details: verified });
             return true;
         } catch (error) {
+            if (error instanceof ToolError && ['MATERIAL_MUTATION_OUTCOME_UNKNOWN', 'UNSUPPORTED_BROADCAST_IPC'].includes(error.code)) throw error;
             let rollbackCause: string | null = null;
-            try { await this.applyDump(assetInfo.uuid, plan.before); } catch (rollbackError) { rollbackCause = String(rollbackError); }
             let restored = false;
             let rollback: 'partial' | 'unknown' = 'unknown';
-            try { restored = this.isRestored(plan.before, await Editor.Message.request('scene', 'query-material', assetInfo.uuid)); rollback = 'partial'; } catch (readError) { rollbackCause = String(readError); }
+            try {
+                await this.applyDump(assetInfo.uuid, plan.before);
+                restored = this.isRestored(plan.before, await this.readBack(assetInfo.uuid, after => this.isRestored(plan.before, after)));
+                rollback = 'partial';
+            } catch (readError) { rollbackCause = String(readError); }
             if (!restored) throw new ToolError({ code: 'ROLLBACK_FAILED', status: 500, message: 'Material edit failed; full native dump restoration could not be verified.', details: { rollback, cause: String(error), rollbackCause } });
             throw new ToolError({ code: error instanceof ToolError ? error.code : 'MUTATION_FAILED', status: 502, message: 'Material edit failed; original native dump was independently restored.', details: { rollback: 'verified-restored', cause: String(error), rollbackCause } });
         }

@@ -125,11 +125,23 @@ export class ExpansionTools {
         requireCreator38('particleConfigure');
         const keys = Object.keys(args.properties);
         if (keys.length < 1 || keys.length > 16 || keys.some((key) => !/^[A-Za-z0-9_.]{1,256}$/.test(key))) throw new ToolError({ code: 'INVALID_PROPERTY', status: 400, message: 'Particle property paths must be 1 to 256 alphanumeric segments.' });
-        const node = await (Editor.Message.request('scene', 'query-node', args.reference.id) as unknown as Promise<NodeRecord | null>);
-        if (!node) throw new ToolError({ code: 'TARGET_NOT_FOUND', status: 404, message: `Scene node ${args.reference.id} was not found.` });
+        for (let index = 0; index < keys.length; index++) {
+            const key = keys[index];
+            if (key.split('.').some(segment => !segment || ['__proto__', 'prototype', 'constructor'].includes(segment)) || keys.slice(0, index).some(previous => previous.startsWith(`${key}.`) || key.startsWith(`${previous}.`))) {
+                throw new ToolError({ code: 'INVALID_PROPERTY', status: 400, message: 'Particle property paths must use safe nonempty segments and must not overlap.' });
+            }
+        }
+        const nodeId = args.reference.id;
+        const nodeType = args.reference.type ?? 'cc.Node';
+        let requested: Record<string, unknown>;
+        try { requested = cloneDump(args.properties); }
+        catch { throw new ToolError({ code: 'INVALID_ARGUMENT', status: 400, message: 'Particle values must be JSON-serializable.' }); }
+        if (keys.some(key => !Object.prototype.hasOwnProperty.call(requested, key) || requested[key] === undefined)) throw new ToolError({ code: 'INVALID_ARGUMENT', status: 400, message: 'Every particle field must retain a JSON-serializable value.' });
+        const node = await (Editor.Message.request('scene', 'query-node', nodeId) as unknown as Promise<NodeRecord | null>);
+        if (!node) throw new ToolError({ code: 'TARGET_NOT_FOUND', status: 404, message: `Scene node ${nodeId} was not found.` });
         const components = node.__comps__ ?? [];
         const index = components.findIndex((component) => /cc\.ParticleSystem(?:2D)?$/.test(componentType(component)));
-        if (index < 0) throw new ToolError({ code: 'UNSUPPORTED_COMPONENT', status: 422, message: `Node ${args.reference.id} has no serialized particle system component.` });
+        if (index < 0) throw new ToolError({ code: 'UNSUPPORTED_COMPONENT', status: 422, message: `Node ${nodeId} has no serialized particle system component.` });
         const component = components[index];
         const values = component.value ?? {};
         const readPath = (root: unknown, propertyPath: string): unknown => propertyPath.split('.').reduce((current: unknown, part: string) => {
@@ -144,35 +156,58 @@ export class ExpansionTools {
             originals[key] = cloneDump(value);
         }
         const componentId = referenceUuid(componentUuid(component));
-        const componentReference = { id: componentId ?? `${args.reference.id}:component:${index}`, type: componentType(component) || 'cc.ParticleSystem' };
+        if (!componentId) throw new ToolError({ code: 'PARTICLE_TARGET_UNVERIFIED', status: 422, message: 'Particle mutation requires a native component UUID.' });
+        const expectedType = componentType(component);
+        const componentReference = { id: componentId, type: expectedType };
+        const queryTarget = async (): Promise<Record<string, unknown>> => {
+            const current = await Editor.Message.request('scene', 'query-node', nodeId) as unknown as NodeRecord | null;
+            const target = current?.__comps__?.[index];
+            if (referenceUuid(current?.uuid) !== nodeId || !target || referenceUuid(componentUuid(target)) !== componentId || componentType(target) !== expectedType) {
+                throw new ToolError({ code: 'PARTICLE_TARGET_CHANGED', status: 409, message: 'Particle node/component identity or index changed; no further writes or restoration were dispatched.', details: { retrySafe: false, restored: null, componentId } });
+            }
+            return target.value ?? {};
+        };
         const applied: string[] = [];
         try {
             for (const key of keys) {
-                const result = await Editor.Message.request('scene', 'set-property', { uuid: args.reference.id, path: `__comps__.${index}.${key}`, dump: { value: args.properties[key] as never, type: 'Unknown' } });
+                await queryTarget();
+                let result: unknown;
+                try {
+                    result = await Editor.Message.request('scene', 'set-property', { uuid: nodeId, path: `__comps__.${index}.${key}`, dump: { value: cloneDump(requested[key]) as never, type: 'Unknown' } });
+                } catch (error) {
+                    throw new ToolError({ code: 'PARTICLE_MUTATION_OUTCOME_UNKNOWN', status: 502, message: 'Particle write was dispatched but its response was lost; no restoration was dispatched.', details: { retrySafe: false, restored: null, componentId, property: key, acknowledgedProperties: [...applied], cause: error instanceof Error ? error.message : String(error) } });
+                }
                 if (result === false) throw new Error(`Creator refused ${key}`);
                 applied.push(key);
             }
             await Editor.Message.request('scene', 'snapshot');
-            const readBackNode = await (Editor.Message.request('scene', 'query-node', args.reference.id) as unknown as Promise<NodeRecord | null>);
-            const readBackValues = readBackNode?.__comps__?.[index]?.value ?? {};
+            const readBackValues = await queryTarget();
             const readBack: Record<string, unknown> = {};
             for (const key of keys) {
                 const actual = readPath(readBackValues, key);
-                if (JSON.stringify(actual) !== JSON.stringify(args.properties[key])) throw new Error(`read-back mismatch for ${key}`);
+                if (!dumpsEqual(actual, requested[key])) throw new Error(`read-back mismatch for ${key}`);
                 readBack[key] = actual;
             }
-            return { reference: { id: args.reference.id, type: args.reference.type ?? 'cc.Node' }, componentReference, properties: readBack, changed: keys, verified: true };
+            return { reference: { id: nodeId, type: nodeType }, componentReference, properties: readBack, changed: keys, verified: true };
         } catch (error) {
+            if (error instanceof ToolError && ['PARTICLE_TARGET_CHANGED', 'PARTICLE_MUTATION_OUTCOME_UNKNOWN'].includes(error.code)) throw error;
             try {
-                for (const key of [...applied].reverse()) await Editor.Message.request('scene', 'set-property', { uuid: args.reference.id, path: `__comps__.${index}.${key}`, dump: { value: originals[key] as never, type: 'Unknown' } });
+                for (const key of [...applied].reverse()) {
+                    const current = await queryTarget();
+                    const observed = readPath(current, key);
+                    if (dumpsEqual(observed, originals[key])) continue;
+                    if (!dumpsEqual(observed, requested[key])) throw new ToolError({ code: 'PARTICLE_RESTORATION_CONFLICT', status: 409, message: 'Particle field changed outside this transaction; restoration refused.', details: { retrySafe: false, restored: null, componentId, property: key } });
+                    const restored = await Editor.Message.request('scene', 'set-property', { uuid: nodeId, path: `__comps__.${index}.${key}`, dump: { value: cloneDump(originals[key]) as never, type: 'Unknown' } });
+                    if (restored === false) throw new Error(`Creator refused rollback ${key}`);
+                }
                 await Editor.Message.request('scene', 'snapshot');
-                const rollbackNode = await (Editor.Message.request('scene', 'query-node', args.reference.id) as unknown as Promise<NodeRecord | null>);
-                const rollbackValues = rollbackNode?.__comps__?.[index]?.value ?? {};
+                const rollbackValues = await queryTarget();
                 for (const key of applied) if (JSON.stringify(readPath(rollbackValues, key)) !== JSON.stringify(originals[key])) throw new Error(`rollback read-back mismatch for ${key}`);
             } catch (rollbackError) {
-                throw new ToolError({ code: 'ROLLBACK_FAILED', status: 500, message: `Particle configuration failed and node ${args.reference.id} could not be restored.`, details: { cause: error instanceof Error ? error.message : String(error), rollback: rollbackError instanceof Error ? rollbackError.message : String(rollbackError) } });
+                if (rollbackError instanceof ToolError && ['PARTICLE_TARGET_CHANGED', 'PARTICLE_RESTORATION_CONFLICT'].includes(rollbackError.code)) throw rollbackError;
+                throw new ToolError({ code: 'ROLLBACK_FAILED', status: 500, message: `Particle configuration failed and node ${nodeId} could not be restored.`, details: { retrySafe: false, restored: null, cause: error instanceof Error ? error.message : String(error), rollback: rollbackError instanceof Error ? rollbackError.message : String(rollbackError) } });
             }
-            throw new ToolError({ code: 'MUTATION_FAILED', status: 502, message: `Particle configuration failed for node ${args.reference.id}.`, details: { cause: error instanceof Error ? error.message : String(error) } });
+            throw new ToolError({ code: 'MUTATION_FAILED', status: 502, message: `Particle configuration failed for node ${nodeId}.`, details: { cause: error instanceof Error ? error.message : String(error) } });
         }
     }
     @utcpTool('terrainInspect', 'Inspect bounded Terrain components and their asset/effect configuration.', { type: 'object', properties: { reference: InstanceReferenceSchema } }, { type: 'object', properties: { terrains: { type: 'array' }, count: { type: 'integer' } }, required: ['terrains', 'count'] }, 'GET', ['terrain', 'inspect'])

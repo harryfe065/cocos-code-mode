@@ -4,6 +4,8 @@ import { InstanceReferenceSchema, IInstanceReference } from '../schemas';
 import { UiTools } from './ui-tools';
 import { AssetTools } from './asset-tools';
 
+import { installVirtualListRuntime } from '../utils/ui-virtual-list-runtime';
+import { installFormValidationRuntime } from '../utils/ui-form-validation-runtime';
 const MAX_VISIBLE_ITEMS = 20;
 
 export class PortfolioCompletionTools {
@@ -33,7 +35,7 @@ export class PortfolioCompletionTools {
     }
 
 
-    @utcpTool('uiVirtualListCreate', 'Create a bounded ScrollView-backed virtual-list shell and materialize only the declared visible item window.', {
+    @utcpTool('uiVirtualListCreate', 'Create a fixed-height vertical ScrollView list with a bounded reusable label pool and persistent runtime recycling component. Installation read-back is not live runtime qualification.', {
         type: 'object', additionalProperties: false,
         properties: {
             name: { type: 'string', minLength: 1, maxLength: 128 }, parentReference: InstanceReferenceSchema,
@@ -42,23 +44,27 @@ export class PortfolioCompletionTools {
             startIndex: { type: 'integer', minimum: 0, maximum: 100000, default: 0 },
         }, required: ['itemCount', 'visibleItems'],
     }, {
-        type: 'object', properties: { reference: { type: 'object' }, viewport: { type: 'object' }, content: { type: 'object' }, itemReferences: { type: 'array' }, itemCount: { type: 'integer' }, instantiatedItems: { type: 'integer' }, virtualized: { type: 'boolean', const: false }, startIndex: { type: 'integer' }, nextIndex: { type: ['integer', 'null'] }, runtimeRecyclingBound: { type: 'boolean', const: false } },
-        required: ['reference', 'viewport', 'content', 'itemReferences', 'itemCount', 'instantiatedItems', 'virtualized', 'startIndex', 'nextIndex', 'runtimeRecyclingBound'],
+        type: 'object', properties: { reference: { type: 'object' }, viewport: { type: 'object' }, content: { type: 'object' }, itemReferences: { type: 'array' }, itemCount: { type: 'integer' }, instantiatedItems: { type: 'integer' }, virtualized: { type: 'boolean', const: true }, startIndex: { type: 'integer' }, nextIndex: { type: ['integer', 'null'] }, runtimeRecyclingBound: { type: 'boolean', const: true }, runtimeVerified: { type: 'boolean', const: false }, runtimeBinding: { type: 'object' } },
+        required: ['reference', 'viewport', 'content', 'itemReferences', 'itemCount', 'instantiatedItems', 'virtualized', 'startIndex', 'nextIndex', 'runtimeRecyclingBound', 'runtimeVerified', 'runtimeBinding'],
     }, 'POST', ['ui', 'virtual', 'list', 'create'])
     async uiVirtualListCreate(args: { name?: string, parentReference?: IInstanceReference, itemCount: number, visibleItems: number, startIndex?: number }): Promise<Record<string, unknown>> {
         if (!args || !Number.isInteger(args.itemCount) || args.itemCount < 0 || args.itemCount > 100000
             || !Number.isInteger(args.visibleItems) || args.visibleItems < 1 || args.visibleItems > MAX_VISIBLE_ITEMS) throw new ToolError({ code: 'INVALID_ARGUMENT', status: 400, message: `itemCount must be an integer from 0 to 100000 and visibleItems from 1 to ${MAX_VISIBLE_ITEMS}.` });
         if (args.name !== undefined && (typeof args.name !== 'string' || args.name.length < 1 || args.name.length > 128)) throw new ToolError({ code: 'INVALID_ARGUMENT', status: 400, message: 'List name must be a string from 1 to 128 characters.' });
-        const startIndex = args.startIndex ?? 0;
-        if (!Number.isInteger(startIndex) || startIndex < 0 || startIndex > args.itemCount) throw new ToolError({ code: 'INVALID_ARGUMENT', status: 400, message: 'startIndex must be an integer within 0..itemCount.' });
+        const requestedStart = args.startIndex ?? 0;
+        if (!Number.isInteger(requestedStart) || requestedStart < 0 || requestedStart > args.itemCount) throw new ToolError({ code: 'INVALID_ARGUMENT', status: 400, message: 'startIndex must be an integer within 0..itemCount.' });
+        const itemCount = args.itemCount;
+        const visibleItems = args.visibleItems;
+        const startIndex = Math.min(requestedStart, Math.max(0, itemCount - visibleItems));
         const ui = new UiTools();
         const list = await ui.uiCreateScrollView({ name: args.name ?? 'VirtualList', parentReference: args.parentReference });
-        const materialized = Math.min(args.itemCount - startIndex, args.visibleItems);
+        const materialized = Math.min(itemCount, visibleItems + 1);
+        const firstIndex = Math.min(startIndex, Math.max(0, itemCount - materialized));
         const itemReferences: IInstanceReference[] = [];
         let pendingItemIndex: number | null = null;
         try {
             for (let index = 0; index < materialized; index++) {
-                const itemIndex = startIndex + index;
+                const itemIndex = firstIndex + index;
                 pendingItemIndex = itemIndex;
                 const item = await ui.createLabel({ name: `Item-${itemIndex}`, text: String(itemIndex), parentReference: list.content });
                 if (!item?.reference || typeof item.reference.id !== 'string' || !item.reference.id
@@ -79,13 +85,14 @@ export class PortfolioCompletionTools {
                 return undefined;
             });
             if (itemReferences.some(reference => children.filter(id => id === reference.id).length !== 1)) throw new Error('Created list items were not uniquely retained under the bound content.');
-            return { ...list, itemReferences, itemCount: args.itemCount, instantiatedItems: itemReferences.length, startIndex, nextIndex: startIndex + materialized < args.itemCount ? startIndex + materialized : null, virtualized: false, runtimeRecyclingBound: false };
+            const runtimeBinding = await installVirtualListRuntime({ root: list.reference, viewport: list.viewport, content: list.content, itemReferences, itemCount, visibleItems, startIndex });
+            return { ...list, itemReferences, itemCount, instantiatedItems: itemReferences.length, startIndex, nextIndex: startIndex + visibleItems < itemCount ? startIndex + visibleItems : null, virtualized: true, runtimeRecyclingBound: true, runtimeVerified: false, runtimeBinding };
         } catch (error) {
-            throw new ToolError({ code: 'UI_LIST_CREATE_PARTIAL', status: 502, message: 'List window creation did not complete; inspect the returned root and acknowledged item identities before another create.', details: { reference: list.reference, content: list.content, itemReferences, pendingItemIndex, retrySafe: false, cleanupAttempted: false, cause: error instanceof Error ? error.message.slice(0, 512) : String(error).slice(0, 512) }, recovery: 'Inspect the owned list hierarchy and any pending item; do not replay creation or delete unconfirmed nodes automatically.' });
+            throw new ToolError({ code: 'UI_LIST_CREATE_PARTIAL', status: 502, message: 'List creation or runtime binding did not complete; inspect acknowledged identities before another create.', details: { reference: list.reference, content: list.content, itemReferences, pendingItemIndex, retrySafe: false, cleanupAttempted: false, cause: error instanceof Error ? error.message.slice(0, 512) : String(error).slice(0, 512), bindingFailure: error instanceof ToolError ? { code: error.code, details: error.details } : null }, recovery: 'Inspect the owned list hierarchy, runtime script/component and pending item; do not replay creation or delete unconfirmed nodes automatically.' });
         }
     }
 
-    @utcpTool('uiFormValidationBind', 'Create a bounded input form and return explicit validation metadata.', {
+    @utcpTool('uiFormValidationBind', 'Create an input form and install persistent required/minLength validation that gates its Submit Button. No gameplay submit callback is added; runtime verification remains separate.', {
         type: 'object', additionalProperties: false,
         properties: {
             label: { type: 'string', minLength: 1, maxLength: 128 },
@@ -97,8 +104,8 @@ export class PortfolioCompletionTools {
         },
         required: ['label'],
     }, {
-        type: 'object', properties: { form: { type: 'object' }, rules: { type: 'object' }, focusOrder: { type: 'array' }, runtimeValidationBound: { type: 'boolean', const: false } },
-        required: ['form', 'rules', 'focusOrder', 'runtimeValidationBound'],
+        type: 'object', properties: { form: { type: 'object' }, rules: { type: 'object' }, focusOrder: { type: 'array' }, runtimeValidationBound: { type: 'boolean', const: true }, runtimeVerified: { type: 'boolean', const: false }, runtimeBinding: { type: 'object' } },
+        required: ['form', 'rules', 'focusOrder', 'runtimeValidationBound', 'runtimeVerified', 'runtimeBinding'],
     }, 'POST', ['ui', 'form', 'validation', 'bind'])
     async uiFormValidationBind(args: { label: string, placeholder?: string, required?: boolean, minLength?: number, name?: string, parentReference?: IInstanceReference }): Promise<Record<string, unknown>> {
         if (!args || typeof args.label !== 'string' || args.label.length < 1 || args.label.length > 128
@@ -110,6 +117,11 @@ export class PortfolioCompletionTools {
         const minLength = args.minLength ?? 0;
         if (minLength > 0 && !required) throw new ToolError({ code: 'INVALID_ARGUMENT', status: 400, message: 'minLength requires required=true.' });
         const form = await new UiTools().uiCreateInputForm({ label: args.label, placeholder: args.placeholder, name: args.name, parentReference: args.parentReference });
-        return { form, rules: { required, minLength, inputReference: form.input }, focusOrder: form.focusOrder, runtimeValidationBound: false };
+        try {
+            const runtimeBinding = await installFormValidationRuntime({ form: form.reference, input: form.input, submit: form.submit, required, minLength });
+            return { form, rules: { required, minLength, inputReference: form.input }, focusOrder: form.focusOrder, runtimeValidationBound: true, runtimeVerified: false, runtimeBinding };
+        } catch (error) {
+            throw new ToolError({ code: 'UI_FORM_BIND_PARTIAL', status: 502, message: 'Form created but runtime validation binding was not confirmed.', details: { form, retrySafe: false, cleanupAttempted: false, bindingFailure: error instanceof ToolError ? { code: error.code, details: error.details } : null }, recovery: 'Inspect the created form and any runtime script/component before another create.' });
+        }
     }
 }

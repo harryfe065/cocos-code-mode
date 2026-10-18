@@ -1,0 +1,29 @@
+{
+  "date": "2026-10-18",
+  "creator": "3.8.8",
+  "project": "G:/_ws/_helpers/cc-minimal-388",
+  "instance": "78fcf250c1564a083421f339aa720d08",
+  "build": {
+    "commit": "b5800154",
+    "dirty": true
+  },
+  "mode": "read-only live native DOM and function-body inspection",
+  "existingPattern": "source/utcp/utils/game-view-transport.ts already uses bounded fixed renderer operations, but it does not supply arbitrary viewport device setter.",
+  "nativeSelector": {
+    "devicesCount": 27,
+    "exact800x600Available": false,
+    "visible": false,
+    "handler": "handleOnDevice(name) resolves existing devicesList entry; unknown entry uses width:0,height:0. Writes gameViewData.devicesInfo then Editor.Profile scene game-view.devicesInfo. Reflow only when visible.",
+    "devicePackage": "modules/editor-extensions/extensions/device/package.json",
+    "deviceMessages": [
+      "query",
+      "custom-device-changed"
+    ],
+    "deviceStorage": "editor custom device preferences; no message-callable arbitrary device setter"
+  },
+  "conclusion": "Preset UI selection cannot preserve previewResolutionSet arbitrary width/height contract. Production fix needs explicit contract change to device preset selection or an approved private native adapter. No fake setter or shared custom-device preference mutation.",
+  "sourceChanges": [],
+  "mutationsDispatched": false,
+  "ownedCreatorStopped": true,
+  "promotion": false
+}

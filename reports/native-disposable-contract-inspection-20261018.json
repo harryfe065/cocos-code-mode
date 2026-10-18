@@ -1,0 +1,26 @@
+{
+  "date": "2026-10-18",
+  "mode": "read-only disposable Creator inspection; no graph/locale/profile/restart mutation",
+  "project": "G:/_ws/_helpers/cc-minimal-388",
+  "instance": "0d365d7a8666830b40e04faee945c195",
+  "build": {"commit":"b5800154","dirty":true,"builtAt":"2026-10-18T06:32:02.463Z"},
+  "graph": {
+    "creator": "3.8.8",
+    "package": "builtin/animation-graph",
+    "manifestMessages": ["apply","delete","copy","duplicate","paste"],
+    "finding": "Manifest exposes panel-bound default methods only; no UUID-bound nonpanel deserialize/serialize/save transaction. Existing source graph operation mapping remains insufficient for safe isolated edits.",
+    "decision": "No production graph implementation; retain blocked."
+  },
+  "localization": {
+    "package": "G:/_ws/_helpers/cc-minimal-388/extensions/localization-editor",
+    "version": "1.0.4",
+    "finding": "Package loaded in Creator3.8.8. Official changeLanguage/restart contract remains package/runtime-owned; host preview-restart receiver is binary and no successor renderer/scene ownership API was exposed by read-only inspection.",
+    "decision": "No standalone restart/rebind adapter; retain blocked."
+  },
+  "webContents": {"main":1,"scenePreview":8,"browserPreview":7,"scenePreload":6},
+  "mutations": [],
+  "verification": [],
+  "qualification": false,
+  "promotion": false,
+  "release": false
+}

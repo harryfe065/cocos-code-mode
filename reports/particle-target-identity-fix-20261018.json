@@ -1,0 +1,30 @@
+{
+  "date": "2026-10-18",
+  "scope": "particleConfigure component identity preservation",
+  "rootCause": "Transaction previously verified and restored by component array index without checking component UUID/type; a replacement with matching values was incorrectly accepted.",
+  "reproduction": "Replacement regression failed pre-fix with Missing expected rejection.",
+  "fix": "Require native component UUID and verify node UUID plus original component UUID/type/index before subsequent writes, final readback and each restoration write; refuse target change with retrySafe:false and restored:null.",
+  "sourceContinuation": {
+    "status": "implemented-needs-verification",
+    "changes": [
+      "Reject parent/child overlapping and unsafe property paths before native queries",
+      "Capture node identity/type and deep-cloned requested values before the first await",
+      "Before restoration, skip already-original values and refuse externally changed values with PARTICLE_RESTORATION_CONFLICT",
+      "Refuse explicit native restoration failure instead of assuming success"
+    ],
+    "typecheck": "npx tsc --noEmit completed without diagnostic output before owner deferred further verification",
+    "behavioralVerification": "pending-owner-deferred",
+    "integration": "pending-owner-deferred",
+    "requiredVerification": ["External edit preservation", "Already-restored field causes no write", "Parent/child overlap refusal before IPC", "Input identity and nested values changed during await", "Native rollback refusal", "Existing particle regressions and native fixture compatibility"]
+  },
+  "verification": {
+    "build": "npm run build PASS including Creator-load check",
+    "focusedTests": "node --test --test-concurrency=1 tests/unit/authoring-wave-k-config.test.js tests/unit/creator38-capability.test.js",
+    "passed": 5,
+    "liveCreatorParticleRun": false,
+    "limitations": "Separate read/write IPC cannot provide atomic compare-and-set. A target may still change after preflight and before native dispatch; this fix prevents false identity verification and further writes after observed target change. No curve persistence/runtime qualification."
+  },
+  "preview": "Owner selected keep blocked and continue other API work; no production preview adapter added.",
+  "promotion": false,
+  "release": false
+}

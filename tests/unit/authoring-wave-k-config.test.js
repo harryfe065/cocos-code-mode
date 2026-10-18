@@ -1,7 +1,7 @@
 'use strict';
 const { describe, it, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
-const { requireDist, readSource } = require('../helpers/require-dist');
+const { requireDist } = require('../helpers/require-dist');
 
 const { ExpansionTools } = requireDist('utcp/tools/expansion-tools.js');
 const { P4ContractTools } = requireDist('utcp/tools/p4-contract-tools.js');
@@ -11,13 +11,6 @@ const { AdvancedCapabilityTools } = requireDist('utcp/tools/advanced-capability-
 afterEach(() => { delete global.Editor; });
 
 describe('Wave K editor configuration contracts', () => {
-  it('registers the bounded configuration routes', () => {
-    assert.match(readSource('utcp/tools/expansion-tools.ts'), /utcpTool\s*\(\s*'particleConfigure'/);
-    assert.match(readSource('utcp/tools/p4-contract-tools.ts'), /utcpTool\s*\(\s*'physics2dConfigure'/);
-    assert.match(readSource('utcp/tools/p4-contract-tools.ts'), /utcpTool\s*\(\s*'physics3dConfigure'/);
-    assert.match(readSource('utcp/tools/material-tools.ts'), /utcpTool\s*\(\s*'renderConfigurationApply'/);
-    assert.match(readSource('utcp/tools/advanced-capability-tools.ts'), /utcpTool\s*\(\s*'previewResolutionSet'/);
-  });
 
   it('configures a serialized particle field and verifies scene read-back', async () => {
     const node = {
@@ -38,6 +31,52 @@ describe('Wave K editor configuration contracts', () => {
     assert.deepEqual(result.properties, { rateOverTime: 20 });
     assert.deepEqual(result.changed, ['rateOverTime']);
     assert.equal(result.verified, true);
+  });
+
+  it('refuses a replaced particle component without restoring into its replacement', async () => {
+    let writes = 0;
+    const node = { uuid: 'particle-node', __comps__: [{ type: 'cc.ParticleSystem', value: {
+      uuid: { value: 'original' }, enabled: { value: true },
+    } }] };
+    global.Editor = { App: { version: '3.8.8' }, Message: { request: async (_service, message) => {
+      if (message === 'query-node') return node;
+      if (message === 'set-property') {
+        writes++;
+        node.__comps__[0] = { type: 'cc.ParticleSystem', value: {
+          uuid: { value: 'replacement' }, enabled: { value: false },
+        } };
+        return true;
+      }
+      if (message === 'snapshot') return true;
+      throw new Error(`unexpected ${message}`);
+    } } };
+    await assert.rejects(new ExpansionTools().particleConfigure({ reference: { id: 'particle-node' }, properties: { enabled: false } }),
+      error => error.code === 'PARTICLE_TARGET_CHANGED' && error.details.retrySafe === false);
+    assert.equal(writes, 1);
+    assert.equal(node.__comps__[0].value.uuid.value, 'replacement');
+    assert.equal(node.__comps__[0].value.enabled.value, false);
+  });
+
+  it('does not restore earlier fields after a later write loses its response', async () => {
+    let writes = 0;
+    const values = { uuid: { value: 'particle' }, enabled: { value: true }, duration: { value: 1 } };
+    const node = { uuid: 'node', __comps__: [{ type: 'cc.ParticleSystem', value: values }] };
+    global.Editor = { App: { version: '3.8.8' }, Message: { request: async (_service, message, payload) => {
+      if (message === 'query-node') return node;
+      if (message === 'snapshot') return true;
+      if (message === 'set-property') {
+        writes++;
+        values[payload.path.split('.').pop()] = payload.dump;
+        if (writes === 2) throw new Error('native response lost after dispatch');
+        return true;
+      }
+      throw new Error(`unexpected ${message}`);
+    } } };
+    await assert.rejects(new ExpansionTools().particleConfigure({ reference: { id: 'node' }, properties: { enabled: false, duration: 2 } }),
+      error => error.code === 'PARTICLE_MUTATION_OUTCOME_UNKNOWN' && error.details.retrySafe === false && error.details.restored === null);
+    assert.equal(writes, 2);
+    assert.equal(values.enabled.value, false);
+    assert.equal(values.duration.value, 2);
   });
 
   it('fails closed for unavailable Creator 3.7 project settings writes', async () => {

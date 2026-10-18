@@ -1,0 +1,39 @@
+{
+  "date": "2026-10-18",
+  "scope": "Remaining native graph authoring and localization restart source prerequisites",
+  "policy": "Source investigation only; owner defers tests/build/integration/live. Missing native contracts are not silently converted to implemented-needs-verify.",
+  "graph": {
+    "status": "blocked-native-serializer-contract",
+    "nativeOperationsEstablished": {
+      "add_node": "StateMachine.addMotion/addEmpty/addSubStateMachine",
+      "remove_node": "StateMachine.remove maintains incident transition topology and refuses special state removal",
+      "update_node": "Native State.name and MotionState speed/speedMultiplier/speedMultiplierEnabled; arbitrary properties not supported",
+      "add_transition": "StateMachine.connect selects native transition subclass and enforces legal endpoints",
+      "remove_transition": "StateMachine.removeTransition exact identity; disconnect removes all matching transitions and is unsuitable"
+    },
+    "evidence": [
+      "Creator3.7.3 engine cocos/animation/marionette/animation-graph.ts serializable topology and post-deserialization ownership reconstruction",
+      "Creator3.7.3 engine editor/exports/new-gen-anim.ts native asset-creation and state operation exports",
+      "Installed builtin/animation-graph/package.json exposes apply/delete/copy/duplicate/paste as selected-panel methods, not exact UUID-bound isolated transaction",
+      "Installed scene-animation-graph.ccc, scene.ccc, panel.ccc are binary archive entries",
+      "Repository creator-types serializeSafe declarations are not installed3.7.3 serializer implementation evidence"
+    ],
+    "missing": "Version-bound isolated graph deserialize/serialize preserving external references, editor extras and reconstructed ownership, with selected-panel dirty/cache ownership understood. Optimistic source hash/readback and explicit unknown mutation outcome are acceptable; lack of atomic CAS alone is not a blocker.",
+    "sourceChanged": false
+  },
+  "localization": {
+    "status": "blocked-restart-host-ownership",
+    "evidence": [
+      "Official localization-editor1.0.4 requires Creator>=3.8.5",
+      "l10n-manager.ts121-141 changes language and, only when !EDITOR, writes localStorage then calls game.restart",
+      "Creator3.8.8 builtin/scene/dist/script/3d/preload/editor-preview.js overrides cc.game.restart to cce.Ipc.clearQueue(); cce.Ipc.send('preview-restart')"
+    ],
+    "missing": "Exact Game View EDITOR flag semantics and host preview-restart replacement/reattach ownership; existing3.7.3 runtime transport is not proof of3.8.8 localization package support. Scene or renderer identity must not be inferred stable from base engine game.restart source.",
+    "sourceChanged": false
+  },
+  "verificationPerformed": [],
+  "qualification": false,
+    "sessionOwnershipGap": "RuntimeSessionTools store/lifecycle mutation lock/active scenarios are private; sessions expose no renderer generation or shared restart lease. Existing operation transport requires same renderer and scene object throughout a mutation. Restart requires a shared lease, successor correlation and invalidation of old node/component handles, not a standalone helper.",
+  "promotion": false,
+  "release": false
+}

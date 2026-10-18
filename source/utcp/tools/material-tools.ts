@@ -258,15 +258,21 @@ export class MaterialTools {
         if (!plan) throw new ToolError({ code: 'INVALID_ARGUMENT', status: 400, message: `Material property '${args.path}' was not found or was not mutable.` });
         try {
             await importer.applyDump(materialId, plan.dump);
-            const after = await queryMaterial(materialId);
+            const after = await importer.readBack(materialId, dump => {
+                const result = importer.verifyEdit(plan, dump);
+                return result.requestedValueMatched && result.unaffectedPassesUnchanged;
+            });
             const verification = importer.verifyEdit(plan, after);
             if (!verification.requestedValueMatched || !verification.unaffectedPassesUnchanged) throw new ToolError({ code: 'READBACK_MISMATCH', status: 502, message: `Material '${args.path}' did not match the normalized request or changed another pass.`, details: verification });
             return { reference: args.reference, path: args.path, changed: !importer.isRestored(plan.before, after), before: plan.before, after, requestedValue: verification.requestedValue, readBackValue: verification.readBackValue, passIndices: plan.passIndices, verification: { requestedValueMatched: true, unaffectedPassesUnchanged: true, unaffectedPassesApplicable: !plan.root }, persistence: { nativeApplyInvoked: true, sourceSaved: null, importCompleted: null, generatedOutputVerified: null, reimportVerified: false, reopenVerified: false } };
         } catch (error) {
+            if (error instanceof ToolError && ['MATERIAL_MUTATION_OUTCOME_UNKNOWN', 'UNSUPPORTED_BROADCAST_IPC'].includes(error.code)) throw error;
             let rollbackCause: string | null = null;
-            try { await importer.applyDump(materialId, plan.before); } catch (rollbackError) { rollbackCause = String(rollbackError); }
             let restored = false;
-            try { restored = importer.isRestored(plan.before, await queryMaterial(materialId)); } catch (readError) { rollbackCause = String(readError); }
+            try {
+                await importer.applyDump(materialId, plan.before);
+                restored = importer.isRestored(plan.before, await importer.readBack(materialId, dump => importer.isRestored(plan.before, dump)));
+            } catch (readError) { rollbackCause = String(readError); }
             if (!restored) throw new ToolError({ code: 'ROLLBACK_FAILED', status: 500, message: 'materialEdit failed and full material restoration could not be verified.', details: { cause: String(error), rollbackCause } });
             throw new ToolError({ code: error instanceof ToolError ? error.code : 'MUTATION_FAILED', status: error instanceof ToolError ? error.status : 502, message: `materialEdit failed for '${args.path}'; original material independently restored.`, details: { ...(error instanceof ToolError ? error.details : {}), rollback: 'verified-restored', cause: String(error), rollbackCause } });
         }

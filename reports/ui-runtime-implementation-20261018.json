@@ -1,0 +1,33 @@
+{
+  "date": "2026-10-18",
+  "status": "implemented-needs-verification",
+  "ownerPolicy": "Implementation first; skip test/build/integration/live and retain explicit verification queue.",
+  "implemented": {
+    "virtualList": "Persistent generated Cocos component; fixed-height vertical ScrollView, bounded min(itemCount,visibleItems+1) numeric-label pool, full content extent, clamped initial index, scrolling reuse, resize and enable/disable listener lifecycle.",
+    "formValidation": "Persistent generated Cocos component; initial and text-change required/minLength validation gates owned Submit Button.interactable; listeners removed on disable/destroy. No gameplay callback.",
+    "installation": "Content-addressed no-overwrite project source; source/asset identity readback; import and bounded class registration observation; existing sceneScriptAttach; typed serialized configuration with independent node/component readback. Partial failures retain known identities with retrySafe:false, no blind deletion/replay.",
+    "publicContracts": "uiVirtualListCreate/uiFormValidationBind schemas, declarations and integration guidance updated; runtimeVerified:false and sceneSaved:false semantics retained. No automatic scene save."
+  },
+  "verification": {
+    "performed": [],
+    "required": [
+      "Project TypeScript compile and Creator-load/module cycle check",
+      "Generated component TypeScript compatibility with supported Creator engine versions",
+      "Native script source create/import/class registration and attach acknowledgement",
+      "Native scalar/array Node property dump compatibility and exact component readback",
+      "Form empty/nonempty/minLength boundaries, text edits, disable/enable/destroy and Submit gating",
+      "Virtual list zero/small/large item counts, startIndex tail clamp, pool overscan and scroll offsets",
+      "Viewport resize, content anchor transforms, ScrollView interaction and listener cleanup",
+      "Partial source/create/attach/configuration failures and lost-response reconciliation",
+      "Save/reopen scene and generated script persistence with exact artifact identity"
+    ]
+  },
+  "blocked": {
+    "nativeGraphAuthoring": "Existing animationGraphEdit deliberately refuses synthetic operations; no evidenced native serializer/edit/save/import transaction. Native contract prerequisite remains, not a deferred test.",
+    "localizationRestart": "Official changeLanguage persists localStorage and invokes game.restart; exact package/session restart and transport-rebind ownership contract remains missing. No editor-only shortcut implemented.",
+    "previewResolution": "Owner selected keep blocked; no private renderer setter adapter added."
+  },
+  "qualification": false,
+  "promotion": false,
+  "release": false
+}

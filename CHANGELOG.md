@@ -2,6 +2,11 @@
 
 ## Unreleased — Creator 3.7 follow-through
 
+- Implement persistent project-generated UI runtime components (needs verification): uiVirtualListCreate installs fixed-height vertical numeric-label recycling with a visibleItems+1 pool, and uiFormValidationBind installs required/minLength Submit gating. Source/import/attach/configuration readback precedes binding success; runtimeVerified remains false and scenes are not automatically saved. Partial failures retain source/component/hierarchy identities without blind cleanup/replay. Native script compilation, runtime UI behavior and save/reopen remain unverified in this wave.
+- Particle source follow-through (needs verification): pin request identity/values before asynchronous IPC, reject overlapping/unsafe property paths, and refuse rollback over externally changed values. These optimistic guards are not atomic compare-and-set; current continuation has not been behaviorally verified.
+- Refuse ambiguous particle write outcomes without rolling back earlier fields: a lost native set-property response returns PARTICLE_MUTATION_OUTCOME_UNKNOWN with retrySafe:false and restored:null; no automatic write retry.
+- Bind particle configuration read-back and restoration to the original native component UUID/type/index; refuse replacement or reorder instead of reporting another component as verified or restoring into it.
+- Wait for exact material import completion and delayed native cache read-back after preview/apply; refuse uncertain save outcomes without racing rollback. Verified one Creator 3.8.8 disposable mainColor edit across restart; preview resolution remains unsupported on stock 3.8.8.
 - Stabilize scenario mutation lifetime: carry cancellation/absolute deadlines through readiness, refuse late undispatched controls, and retain session ownership until underlying native requests settle after wrapper timeouts. Native work already sent is not cancelled or replayed.
 - Preserve full animationEvents capture windows with bounded completion allowance inside total scenario deadlines; refuse insufficient capture/verification budgets before listener registration.
 - Restore source/declaration editor-IPC argument dependencies in get_related_types; keep member/related-type navigation metadata-only and reject live navigation references.

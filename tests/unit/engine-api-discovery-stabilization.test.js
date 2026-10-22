@@ -108,6 +108,41 @@ test('navigation refuses instance references instead of mapping them through Ins
   assert.deepEqual(calls, { editor: 0, inspector: 0 });
 });
 
+test('get_signature exposes stable overload/accessor identities without collapsing type evidence', async t => {
+  const record = engineRecord();
+  record.id = '3.7.3:engine-runtime:cc:Widget:target:accessor:instance';
+  record.className = 'Widget';
+  record.member = record.name = 'target';
+  record.kind = 'accessor';
+  record.semanticKey = '["engine-runtime","cc","Widget","target","accessor",false]';
+  const anyEvidence = { kind: 'any', reference: 'error' };
+  record.signatures = [
+    { kind: 'get', overload: 0, signatureId: 'target-get', parameters: [], returnType: 'Node | null', returnReferences: [dto], unresolved: [] },
+    { kind: 'set', overload: 1, signatureId: 'target-set', parameters: [{ name: 'value', type: 'any', optional: false, rest: false, references: [], unresolved: [anyEvidence] }], returnType: 'void', unresolved: [] }
+  ];
+  record.declarationEvidence = { signatures: [{ kind: 'get', overload: 0, signatureId: 'decl-target-get', parameters: [], returnType: 'Node | null', unresolved: [{ kind: 'unknown', reference: 'cycle' }] }] };
+  const calls = catalog(t, record);
+  const result = await discoverEngineApi({ operation: 'get_signature', recordId: record.id });
+  const projected = result.records[0];
+  assert.deepEqual(projected.signatureIdentities.catalog, [
+    {
+      evidence: 'catalog-signature', recordId: record.id, semanticKey: record.semanticKey, className: 'Widget', member: 'target',
+      recordKind: 'accessor', static: null, overload: 0, signatureId: 'target-get', signatureKind: 'get', accessor: 'get'
+    },
+    {
+      evidence: 'catalog-signature', recordId: record.id, semanticKey: record.semanticKey, className: 'Widget', member: 'target',
+      recordKind: 'accessor', static: null, overload: 1, signatureId: 'target-set', signatureKind: 'set', accessor: 'set'
+    }
+  ]);
+  assert.deepEqual(projected.signatureIdentities.declaration.map(identity => [identity.evidence, identity.overload, identity.accessor]), [['declaration-signature', 0, 'get']]);
+  assert.equal(projected.signatures[0].returnType, 'Node | null');
+  assert.deepEqual(projected.signatures[0].returnReferences, [dto]);
+  assert.deepEqual(projected.signatures[1].parameters[0].unresolved, [anyEvidence]);
+  assert.deepEqual(projected.declarationEvidence.signatures[0].unresolved, [{ kind: 'unknown', reference: 'cycle' }]);
+  assert.equal(result.live.mutationAuthorized, false);
+  assert.deepEqual(calls, { editor: 0, inspector: 0 });
+});
+
 test('records and exact signatures retain intentional observations without granting permission', async t => {
   const record = engineRecord();
   catalog(t, record);

@@ -995,7 +995,7 @@ export class AssetTools {
             reference: InstanceReferenceSchema,
             assetKind: { type: 'string', enum: ['asset', 'script', 'all'], default: 'all' },
             resolveUrls: { type: 'boolean', default: false },
-            limit: { type: 'number', minimum: 1, maximum: 1000, default: 200 },
+            limit: { type: 'integer', minimum: 1, maximum: 1000, default: 200 },
         },
         required: ['reference'],
     }, {
@@ -1008,11 +1008,25 @@ export class AssetTools {
         },
         required: ['references', 'total', 'truncated'],
     }, "GET", ['asset', 'reference', 'dependency', 'used', 'usage', 'impact'])
-    async assetFindReferences(args: { direction?: 'used_by' | 'depends_on', reference: IInstanceReference, assetKind?: string, resolveUrls?: boolean, limit?: number }): Promise<{ references: IInstanceReference[], assets?: Array<{ uuid: string, url?: string, type?: string }>, total: number, truncated: boolean }> {
-        if (!args.reference?.id) throw new Error('assetFindReferences requires reference.id');
+    async assetFindReferences(args: { direction?: 'used_by' | 'depends_on', reference: IInstanceReference, assetKind?: 'asset' | 'script' | 'all', resolveUrls?: boolean, limit?: number }): Promise<{ references: IInstanceReference[], assets?: Array<{ uuid: string, url?: string, type?: string }>, total: number, truncated: boolean }> {
+        if (!args || typeof args !== 'object' || !args.reference || typeof args.reference.id !== 'string' || !args.reference.id.trim() || args.reference.id.length > 256) {
+            throw new ToolError({ code: 'INVALID_ARGUMENT', status: 400, message: 'assetFindReferences requires a non-empty reference.id of at most 256 characters.' });
+        }
         const direction = args.direction ?? 'used_by';
-        if (direction !== 'used_by' && direction !== 'depends_on') throw new Error(`Unknown direction: ${direction}`);
+        if (direction !== 'used_by' && direction !== 'depends_on') {
+            throw new ToolError({ code: 'INVALID_ARGUMENT', status: 400, message: 'direction must be used_by or depends_on.' });
+        }
         const kind = args.assetKind ?? 'all';
+        if (!['asset', 'script', 'all'].includes(kind)) {
+            throw new ToolError({ code: 'INVALID_ARGUMENT', status: 400, message: 'assetKind must be asset, script, or all.' });
+        }
+        if (args.resolveUrls !== undefined && typeof args.resolveUrls !== 'boolean') {
+            throw new ToolError({ code: 'INVALID_ARGUMENT', status: 400, message: 'resolveUrls must be a boolean.' });
+        }
+        const limit = args.limit === undefined ? 200 : args.limit;
+        if (!Number.isInteger(limit) || limit < 1 || limit > 1000) {
+            throw new ToolError({ code: 'INVALID_ARGUMENT', status: 400, message: 'limit must be an integer from 1 to 1000.' });
+        }
         const candidates = direction === 'used_by'
             ? ['query-asset-users', 'query-asset-used']
             : ['query-asset-dependencies', 'query-asset-dependinces'];
@@ -1029,17 +1043,20 @@ export class AssetTools {
         }
         if (lastError) {
             const reason = lastError instanceof Error ? lastError.message : String(lastError);
-            throw new Error(`Failed to query asset ${direction}: ${reason}`);
+            throw new ToolError({ code: 'ASSET_REFERENCE_QUERY_FAILED', status: 502, message: `Failed to query asset ${direction}.`, details: { cause: reason.slice(0, 512), direction, referenceId: args.reference.id } });
         }
-        const list: unknown[] = Array.isArray(raw) ? raw : [];
-        const uuids = list.flatMap((item): string[] => {
-            if (typeof item === 'string') return item ? [item] : [];
-            if (!item || typeof item !== 'object') return [];
-            const uuid: unknown = Reflect.get(item, 'uuid') ?? Reflect.get(item, 'id');
-            return typeof uuid === 'string' && uuid ? [uuid] : [];
-        });
+        if (!Array.isArray(raw) || raw.length > 10000) {
+            throw new ToolError({ code: 'INVALID_ASSET_REFERENCE_RESPONSE', status: 502, message: 'Creator returned an invalid or oversized asset reference list.', details: { maxEntries: 10000 } });
+        }
+        const uuids: string[] = [];
+        for (const item of raw) {
+            const uuid = typeof item === 'string' ? item : item && typeof item === 'object' ? Reflect.get(item, 'uuid') ?? Reflect.get(item, 'id') : undefined;
+            if (typeof uuid !== 'string' || !uuid || uuid.length > 256) {
+                throw new ToolError({ code: 'INVALID_ASSET_REFERENCE_RESPONSE', status: 502, message: 'Creator returned an asset reference without a bounded UUID.', details: { maxLength: 256 } });
+            }
+            uuids.push(uuid);
+        }
         const total = uuids.length;
-        const limit = boundedPositive(args.limit, 200, 1000);
         const limitedUuids = uuids.slice(0, limit);
         const references = limitedUuids.map((id): IInstanceReference => ({ id }));
         const truncated = total > references.length;
@@ -1047,7 +1064,7 @@ export class AssetTools {
         const assets: Array<{ uuid: string, url?: string, type?: string }> = [];
         for (const uuid of limitedUuids) {
             const info: AssetInfo | null = await Editor.Message.request('asset-db', 'query-asset-info', uuid);
-            assets.push({ uuid, url: info?.url, type: info?.type });
+            assets.push({ uuid, url: typeof info?.url === 'string' ? info.url : undefined, type: typeof info?.type === 'string' ? info.type : undefined });
         }
         return { references, assets, total, truncated };
     }

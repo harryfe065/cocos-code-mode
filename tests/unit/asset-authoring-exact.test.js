@@ -167,6 +167,46 @@ describe('exact asset authoring adapters', () => {
     const names = ToolRegistry.getTools().map(({ tool }) => tool.name);
     assert.ok(names.includes('scriptDependencyImpactInspect'));
   });
+  it('rejects invalid reference limits before querying the Asset DB', async () => {
+    let requests = 0;
+    const restore = install(async () => {
+      requests++;
+      throw new Error('Asset DB must not be queried for invalid input');
+    });
+    try {
+      await assert.rejects(
+        () => new AssetTools().assetFindReferences({ reference: { id: 'asset-id' }, limit: 0 }),
+        (error) => error.code === 'INVALID_ARGUMENT' && error.status === 400,
+      );
+      assert.equal(requests, 0);
+    } finally { restore(); }
+  });
+
+  it('returns bounded dependency identities and resolves only the bounded page', async () => {
+    const calls = [];
+    const restore = install(async (service, message, id) => {
+      calls.push([service, message, id]);
+      if (message === 'query-asset-dependencies') return ['dep-a', { uuid: 'dep-b' }, { id: 'dep-c' }];
+      if (message === 'query-asset-info') return { uuid: id, url: `db://assets/${id}.json`, type: 'cc.JsonAsset' };
+      throw new Error(`Unexpected ${service}.${message}:${id}`);
+    });
+    try {
+      const result = await new AssetTools().assetFindReferences({ direction: 'depends_on', reference: { id: 'asset-id' }, resolveUrls: true, limit: 2 });
+      assert.deepEqual(result.references, [{ id: 'dep-a' }, { id: 'dep-b' }]);
+      assert.deepEqual(result.assets, [
+        { uuid: 'dep-a', url: 'db://assets/dep-a.json', type: 'cc.JsonAsset' },
+        { uuid: 'dep-b', url: 'db://assets/dep-b.json', type: 'cc.JsonAsset' },
+      ]);
+      assert.equal(result.total, 3);
+      assert.equal(result.truncated, true);
+      assert.deepEqual(calls, [
+        ['asset-db', 'query-asset-dependencies', 'asset-id'],
+        ['asset-db', 'query-asset-info', 'dep-a'],
+        ['asset-db', 'query-asset-info', 'dep-b'],
+      ]);
+    } finally { restore(); }
+  });
+
 
   it('registers imported image inspection', () => {
     const names = ToolRegistry.getTools().map(({ tool }) => tool.name);

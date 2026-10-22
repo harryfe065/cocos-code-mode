@@ -20,6 +20,19 @@ export interface EngineDiscoveryArgs {
 }
 const ApiRecordSchema = z.object({ id: z.string().min(1), className: z.string().nullable().optional(), namespace: z.string(), member: z.string().nullable().optional(), name: z.string().optional(), kind: z.string().optional(), static: z.boolean().nullable().optional(), signatures: z.array(z.unknown()).optional() }).passthrough();
 type ApiRecord = InferSchema<typeof ApiRecordSchema>;
+interface SignatureIdentity {
+    evidence: 'catalog-signature' | 'declaration-signature';
+    recordId: string;
+    semanticKey: string | null;
+    className: string | null;
+    member: string | null;
+    recordKind: string | null;
+    static: boolean | null;
+    overload: number | null;
+    signatureId: string | null;
+    signatureKind: string | null;
+    accessor: 'get' | 'set' | null;
+}
 const CatalogIndexSchema = z.object({ schemaVersion: z.literal(1), version: z.string(), catalogHash: z.string().regex(/^[a-f0-9]{64}$/), domains: z.array(z.object({ name: z.string(), file: z.string(), count: z.number().int().nonnegative() })).max(1000) });
 const CursorSchema = z.object({ hash: z.string(), selector: z.string(), offset: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER) });
 const CATALOG_ROOT = path.join(__dirname, 'engine-api-catalog');
@@ -28,6 +41,24 @@ const MAX_CATALOG_FILE = 8 * 1024 * 1024;
 function jsonFile(file: string): unknown {
     const root = fs.realpathSync(path.dirname(file));
     return parseCatalogJson(readBounded(root, path.basename(file), MAX_CATALOG_FILE));
+}
+function signatureIdentity(record: ApiRecord, signature: Record<string, unknown>, evidence: 'catalog-signature' | 'declaration-signature'): SignatureIdentity {
+    const overload = signature.overload;
+    const overloadIndex = typeof overload === 'number' && Number.isInteger(overload) && overload >= 0 ? overload : null;
+    const signatureKind = typeof signature.kind === 'string' ? signature.kind : null;
+    return {
+        evidence,
+        recordId: record.id,
+        semanticKey: typeof record.semanticKey === 'string' ? record.semanticKey : null,
+        className: record.className ?? null,
+        member: record.member ?? null,
+        recordKind: record.kind ?? null,
+        static: typeof record.static === 'boolean' ? record.static : null,
+        overload: overloadIndex,
+        signatureId: typeof signature.signatureId === 'string' ? signature.signatureId : null,
+        signatureKind,
+        accessor: record.kind === 'accessor' && (signatureKind === 'get' || signatureKind === 'set') ? signatureKind : null,
+    };
 }
 function limit(value: number | undefined, fallback: number, maximum: number): number {
     const selected = value === undefined ? fallback : value;
@@ -422,19 +453,28 @@ async function discoverWithinDeadline(args: EngineDiscoveryArgs, deadline: numbe
             }
             return false;
         };
-        reserveSignatureContainers(record.signatures?.length ?? 0);
-        if (record.signatures?.some(invalidSignature)) throw new ToolError({ code: 'CATALOG_INVALID', status: 502, message: 'Record signature metadata is malformed.' });
+        const sourceSignatures = record.signatures ?? [];
+        reserveSignatureContainers(sourceSignatures.length);
+        if (sourceSignatures.some(invalidSignature)) throw new ToolError({ code: 'CATALOG_INVALID', status: 502, message: 'Record signature metadata is malformed.' });
+        let declarationSignatures: unknown[] = [];
         const declaration = record.declarationEvidence;
         if (declaration !== undefined && declaration !== null) {
             if (typeof declaration !== 'object' || Array.isArray(declaration)) throw new ToolError({ code: 'CATALOG_INVALID', status: 502, message: 'Declaration evidence metadata is malformed.' });
             const signatures = (declaration as Record<string, unknown>).signatures;
             if (signatures !== undefined) {
                 if (!Array.isArray(signatures)) throw new ToolError({ code: 'CATALOG_INVALID', status: 502, message: 'Declaration signature metadata is malformed.' });
+                declarationSignatures = signatures;
                 reserveSignatureContainers(signatures.length);
                 for (const signature of signatures) if (invalidSignature(signature)) throw new ToolError({ code: 'CATALOG_INVALID', status: 502, message: 'Declaration signature metadata is malformed.' });
             }
         }
-        records.splice(0, records.length, { id: record.id, namespace: record.namespace, className: record.className, member: record.member, name: record.name, kind: record.kind, static: typeof record.static === 'boolean' ? record.static : null, signatures: record.signatures ?? [], declarationEvidence: record.declarationEvidence ?? null, permitted: false, evidenceStatus: record.evidenceStatus ?? null });
+        const identities = (signatures: unknown[], evidence: 'catalog-signature' | 'declaration-signature') => signatures.map(signature => signatureIdentity(record, signature as Record<string, unknown>, evidence));
+        records.splice(0, records.length, {
+            id: record.id, namespace: record.namespace, className: record.className, member: record.member, name: record.name, kind: record.kind,
+            static: typeof record.static === 'boolean' ? record.static : null, semanticKey: record.semanticKey ?? null,
+            signatures: sourceSignatures, signatureIdentities: { catalog: identities(sourceSignatures, 'catalog-signature'), declaration: identities(declarationSignatures, 'declaration-signature') },
+            declarationEvidence: record.declarationEvidence ?? null, permitted: false, evidenceStatus: record.evidenceStatus ?? null,
+        });
     }
     if (offset > records.length) throw new ToolError({ code: 'STALE_CURSOR', status: 409, message: 'Catalog cursor offset exceeds this result set.' });
     if (args.className && records.length === 0 && !matchedCatalogTarget && operation !== 'get_related_types') throw new ToolError({ code: 'TARGET_NOT_FOUND', status: 404, message: `Class ${args.className} is absent from the ${version} catalog.` });

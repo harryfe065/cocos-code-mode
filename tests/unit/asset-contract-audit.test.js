@@ -68,7 +68,7 @@ describe('asset contract audit regressions', () => {
     assert.match(assetOperate, /required: \['meta'\]/);
 
     const assetReferences = toolContract(assets, 'assetFindReferences');
-    assert.match(assetReferences, /limit: \{ type: 'number', minimum: 1, maximum: 1000/);
+    assert.match(assetReferences, /limit: \{ type: 'integer', minimum: 1, maximum: 1000/);
     assert.match(assetReferences, /const limitedUuids = uuids\.slice\(0, limit\)/);
     assert.match(assetReferences, /for \(const uuid of limitedUuids\)/);
     assert.match(assetReferences, /truncated/);

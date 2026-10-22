@@ -348,7 +348,7 @@ export class ComponentTools {
             const normalizedBefore = typeof beforeUuid === 'string' ? beforeUuid : field(beforeUuid, 'value');
             if (normalizedBefore !== componentId) throw new ToolError({ code: 'COMPONENT_TARGET_CHANGED', status: 409, message: `Component ${componentId} identity could not be confirmed before removal.`, details: { retrySafe: false, restored: null } });
             mutationPending = true;
-            const removed = await Editor.Message.request('scene', 'remove-component', { uuid: componentId });
+            const removed: unknown = await Editor.Message.request('scene', 'remove-component', { uuid: componentId });
             mutationPending = false;
             if (removed === false) throw new Error(`Creator refused removal of component ${componentId}`);
             const remaining = await Editor.Message.request('scene', 'query-component', componentId);
@@ -360,8 +360,7 @@ export class ComponentTools {
         } catch (error: unknown) {
             if (mutationPending) throw new ToolError({ code: 'COMPONENT_REMOVE_OUTCOME_UNKNOWN', status: 502, message: `Component ${componentId} removal was dispatched but its outcome is unknown.`, details: { componentId, retrySafe: false, restored: null, cause: error instanceof Error ? error.message : String(error) }, recovery: 'Inspect the component inventory before another removal; do not replay automatically.' });
             if (removalConfirmed) throw new ToolError({ code: 'COMPONENT_REMOVE_SNAPSHOT_UNCONFIRMED', status: 502, message: 'Component absence was confirmed but its undo snapshot was not confirmed.', details: { componentId, removed: true, snapshotConfirmed: false, retrySafe: false, cause: error instanceof Error ? error.message : String(error) }, recovery: 'Reconcile undo/snapshot state; do not repeat component removal.' });
-            if (error instanceof ToolError) throw error;
-            throw new ToolError({ code: 'COMPONENT_REMOVE_FAILED', status: 502, message: `Failed to remove component ${componentId}.`, details: { componentId, retrySafe: false, restored: null, cause: error instanceof Error ? error.message : String(error) }, recovery: 'Inspect the exact component identity before retrying.' });
+            throw new ToolError({ code: 'COMPONENT_REMOVE_FAILED', status: 502, message: `Failed to remove component ${componentId}: ${error instanceof Error ? error.message : String(error)}`, details: { componentId, retrySafe: false, restored: null, cause: error instanceof Error ? error.message : String(error) }, recovery: 'Inspect the exact component identity before retrying.' });
         }
     }
 

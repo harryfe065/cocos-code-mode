@@ -97,7 +97,11 @@ describe('component authoring mutation postconditions', () => {
         if (queryCount === 1) return { uuid: 'node', __comps__: [] };
         return { uuid: 'node', __comps__: [{ type: 'cc.Label', value: { uuid: { value: 'label-component' } } }] };
       }
-      if (message === 'execute-scene-script') return payload.method === 'stopCatchLogging' ? [] : true;
+      if (message === 'execute-scene-script') {
+        if (payload.method === 'startCatchLogging') return { owner: payload.args[0], active: true, expiresAt: payload.args[1] };
+        if (payload.method === 'inspectCatchLogging') return { active: false, owned: false, handlerCurrent: false };
+        return [];
+      }
       if (message === 'create-component' || message === 'snapshot') return true;
       throw new Error(`unexpected ${message}`);
     } } };
@@ -488,7 +492,7 @@ describe('scene upgrade read-back contracts', () => {
     } } };
     await assert.rejects(
       new SceneTools().cameraSetProperties({ reference: { id: 'camera-1' }, properties: { fov: 60 } }),
-      error => error.code === 'CAMERA_PROPERTY_UPDATE_FAILED',
+      error => error.code === 'ROLLBACK_FAILED' && error.details.rollbackFailure === 'fov',
     );
   });
 });

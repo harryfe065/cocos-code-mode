@@ -135,7 +135,7 @@ it('retains busy ownership when the outer scenario deadline wins before the tran
   let dispatches = 0;
   RuntimeSessionTools.prototype.runtimeSessionLifecycle = async () => ready(sessionId);
   transport.executeGameViewOperation = () => { dispatches++; return wrapper.promise; };
-  const pending = tools.runtimeScenarioRun({ sessionId, runId, steps: [{ ...controls[1], timeoutMs: 100 }] });
+  const pending = tools.runtimeScenarioRun({ sessionId, runId, totalTimeoutMs: 5000, steps: [{ ...controls[1], timeoutMs: 1000 }] });
   await assert.rejects(pending, { code: 'RUNTIME_STATE_TIMEOUT' });
   const failure = new ToolError({ code: 'RUNTIME_STATE_TIMEOUT', status: 409, message: 'Native mutation remains queued', details: { mutationDispatched: true, retrySafe: false } });
   Object.defineProperty(failure, 'pendingRequest', { value: native.promise });

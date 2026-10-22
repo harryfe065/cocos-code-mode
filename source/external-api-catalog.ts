@@ -60,6 +60,7 @@ export interface ExternalApiCatalog {
     snapshotHash: string;
     entries: ExternalApiEntry[];
     domains: Array<{ name: string; file: string; count: number }>;
+    findEntry(id: string): ExternalApiEntry | undefined;
     readRecord(id: string): Record<string, unknown>;
 }
 
@@ -106,6 +107,7 @@ export function openExternalApiCatalog(version: string): ExternalApiCatalog | nu
         snapshotHash: crypto.createHash('sha256').update(JSON.stringify([project, version, root, lookupRoot, selected.lookupSha256])).digest('hex'),
         catalogHash: lookup.catalogHash, entries: lookup.entries.map(entry => ({ ...entry, ...(entry.contexts ? { contexts: [...entry.contexts] } : {}) })),
         domains: lookup.shards.map(shard => ({ name: shard.domain, file: shard.file, count: shard.count })),
+        findEntry(id) { return entriesById.get(id); },
         readRecord(id) {
             const entry = entriesById.get(id);
             if (!entry) throw new ToolError({ code: 'TARGET_NOT_FOUND', status: 404, message: 'Catalog record was not indexed.' });

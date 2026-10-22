@@ -39,8 +39,9 @@ export async function discoverEngineApi(args: EngineDiscoveryArgs): Promise<Reco
     if (!args || typeof args !== 'object' || Array.isArray(args)) throw new ToolError({ code: 'INVALID_ARGUMENT', status: 400, message: 'Catalog discovery requires an argument object.' });
     args = { ...args, ...(args.reference && typeof args.reference === 'object' && !Array.isArray(args.reference) ? { reference: { ...args.reference } } : {}) };
     const timeoutMs = limit(args.timeoutMs, 5000, 30000);
+    const maxPages = limit(args.maxPages, 256, 1000);
     try {
-        return await discoverWithinDeadline(args, Date.now() + timeoutMs, { remaining: limit(args.maxPages, 256, 1000), recordsRemaining: 100000, bytesRemaining: 32 * 1024 * 1024 });
+        return await discoverWithinDeadline(args, Date.now() + timeoutMs, { remaining: maxPages, indexEntriesRemaining: maxPages * 256, recordsRemaining: 100000, bytesRemaining: 32 * 1024 * 1024 });
     } catch (error: unknown) {
         if (error instanceof z.ZodError) throw new ToolError({ code: 'CATALOG_INVALID', status: 502, message: 'Catalog metadata does not match its required schema.' });
         if (!(error instanceof ToolError) && error && typeof error === 'object' && 'code' in error
@@ -49,7 +50,7 @@ export async function discoverEngineApi(args: EngineDiscoveryArgs): Promise<Reco
     }
 }
 
-async function discoverWithinDeadline(args: EngineDiscoveryArgs, deadline: number, pages: { remaining: number; recordsRemaining: number; bytesRemaining: number }): Promise<Record<string, unknown>> {
+async function discoverWithinDeadline(args: EngineDiscoveryArgs, deadline: number, pages: { remaining: number; indexEntriesRemaining: number; recordsRemaining: number; bytesRemaining: number }): Promise<Record<string, unknown>> {
     const checkDeadline = () => {
         if (Date.now() >= deadline) throw new ToolError({ code: 'CATALOG_QUERY_TIMEOUT', status: 409, message: 'Catalog discovery exceeded its cooperative deadline; no complete result returned.' });
     };
@@ -162,9 +163,6 @@ async function discoverWithinDeadline(args: EngineDiscoveryArgs, deadline: numbe
     const maxEntries = limit(args.maxEntries, 50, 200), maxBytes = limit(args.maxBytes, 32768, 131072);
     const external = openExternalApiCatalog(version);
     checkDeadline();
-    if (args.module !== undefined && external && external.entries.some(entry => entry.module === undefined)) throw new ToolError({ code: 'CATALOG_INDEX_UPGRADE_REQUIRED', status: 409, message: 'Regenerate the approved lookup with module metadata and explicitly update its configured hash before filtering by module.' });
-    if (args.visibility !== undefined && external && external.entries.some(entry => entry.visibility === undefined)) throw new ToolError({ code: 'CATALOG_INDEX_UPGRADE_REQUIRED', status: 409, message: 'Regenerate the approved lookup with explicit visibility metadata and update its configured hash before filtering.' });
-    if (external && external.entries.some(entry => args.context !== undefined && entry.contexts === undefined || args.evidenceState !== undefined && entry.evidenceState === undefined)) throw new ToolError({ code: 'CATALOG_INDEX_UPGRADE_REQUIRED', status: 409, message: 'Regenerate lookup context/evidence metadata and explicitly update its configured hash before filtering.' });
     const indexPath = path.join(CATALOG_ROOT, version, 'index.json');
     if (!external && !fs.existsSync(indexPath)) throw new ToolError({ code: 'CATALOG_UNAVAILABLE', status: 422, message: `No installed catalog for ${version}.` });
     const indexBytes = external ? null : readBounded(fs.realpathSync(path.dirname(indexPath)), path.basename(indexPath), MAX_CATALOG_FILE);
@@ -192,8 +190,16 @@ async function discoverWithinDeadline(args: EngineDiscoveryArgs, deadline: numbe
     const records: ApiRecord[] = [];
     const manifestNamespaces = operation === 'list_namespaces' && [args.filter, args.kind, args.module, args.visibility, args.context, args.evidenceState, args.member].every(value => value === undefined);
     if (external && operation !== 'list_domains' && !manifestNamespaces) {
-        for (const entry of external.entries) {
+        const indexedEntries = args.recordId === undefined ? external.entries : [external.findEntry(args.recordId)].filter((entry): entry is typeof external.entries[number] => entry !== undefined);
+        for (const entry of indexedEntries) {
             checkDeadline();
+            if (args.recordId === undefined) {
+                pages.indexEntriesRemaining--;
+                if (pages.indexEntriesRemaining < 0) throw new ToolError({ code: 'CATALOG_INDEX_LIMIT', status: 413, message: 'External catalog index scan budget exhausted; narrow the query or explicitly increase maxPages.' });
+            }
+            if (args.module !== undefined && entry.module === undefined) throw new ToolError({ code: 'CATALOG_INDEX_UPGRADE_REQUIRED', status: 409, message: 'Regenerate the approved lookup with module metadata before filtering by module.' });
+            if (args.visibility !== undefined && entry.visibility === undefined) throw new ToolError({ code: 'CATALOG_INDEX_UPGRADE_REQUIRED', status: 409, message: 'Regenerate the approved lookup with explicit visibility metadata before filtering.' });
+            if ((args.context !== undefined || args.evidenceState !== undefined) && (args.context !== undefined && entry.contexts === undefined || args.evidenceState !== undefined && entry.evidenceState === undefined)) throw new ToolError({ code: 'CATALOG_INDEX_UPGRADE_REQUIRED', status: 409, message: 'Regenerate lookup context/evidence metadata before filtering.' });
             if (args.recordId !== undefined && entry.id !== args.recordId) continue;
             if (args.member !== undefined && entry.member !== args.member) continue;
             if (args.kind !== undefined && entry.kind !== args.kind) continue;

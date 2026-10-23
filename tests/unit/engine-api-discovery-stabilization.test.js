@@ -11,7 +11,7 @@ const { ToolsUtils } = requireDist('utcp/utils/tools-utils.js');
 const hash = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 const dto = { name: 'ArgsDto', resolution: 'resolved', kind: 'interface', enumValues: null };
 const ipcRecord = () => ({ id: '3.7.3:editor-ipc:scene:inspect:message:instance', version: '3.7.3', namespace: 'editor-ipc', className: null, member: 'inspect', name: 'inspect', kind: 'message', domain: 'scene', signatures: [], permitted: true });
-const engineRecord = () => ({ id: '3.7.3:engine-runtime:cc:Button:inspect:method:instance', version: '3.7.3', namespace: 'engine-runtime', module: 'cc/ui', className: 'Button', member: 'inspect', name: 'inspect', kind: 'method', visibility: 'public', domain: 'ui', signatures: [], permitted: true });
+const engineRecord = () => ({ id: '3.7.3:engine-runtime:cc:Button:inspect:method:instance', version: '3.7.3', namespace: 'engine-runtime', module: 'cc/ui', className: 'Button', member: 'inspect', name: 'inspect', kind: 'method', visibility: 'public', contextConstraints: { execution: ['game-runtime'] }, domain: 'ui', signatures: [], permitted: true });
 
 function catalog(t, record) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ccp-discovery-stabilization-'));
@@ -28,7 +28,9 @@ function catalog(t, record) {
   const domain = `${record.namespace}.${record.domain}`, catalogHash = 'a'.repeat(64);
   const shard = Buffer.from(JSON.stringify({ records: [record] }));
   const index = Buffer.from(JSON.stringify({ schemaVersion: 1, version: record.version, catalogHash, domains: [{ name: domain, file: 'records.json', count: 1 }] }));
-  const lookup = Buffer.from(JSON.stringify({ schemaVersion: 1, version: record.version, catalogHash, sourceIndexSha256: hash(index), shards: [{ file: 'records.json', sha256: hash(shard), count: 1, domain }], entries: [{ ...record, domain, shard: 0 }] }));
+  const indexedContexts = record.contextConstraints?.execution;
+  const lookupEntry = { ...record, domain, shard: 0, ...(indexedContexts !== undefined ? { contexts: indexedContexts } : {}) };
+  const lookup = Buffer.from(JSON.stringify({ schemaVersion: 1, version: record.version, catalogHash, sourceIndexSha256: hash(index), shards: [{ file: 'records.json', sha256: hash(shard), count: 1, domain }], entries: [lookupEntry] }));
   fs.writeFileSync(path.join(catalogRoot, 'records.json'), shard);
   fs.writeFileSync(path.join(catalogRoot, 'index.json'), index);
   fs.writeFileSync(path.join(lookupRoot, 'lookup.json'), lookup);
@@ -99,6 +101,9 @@ test('class member and related-type navigation never dispatch availability or In
   const visibility = await discoverEngineApi({ operation: 'list_visibility', namespace: 'engine-runtime' });
   assert.deepEqual(visibility.records.map(row => [row.name, row.visibility, row.recordCount, row.permitted]), [['public', 'public', 1, false]]);
   assert.equal(visibility.live.checked, false);
+  const contexts = await discoverEngineApi({ operation: 'list_contexts', namespace: 'engine-runtime' });
+  assert.deepEqual(contexts.records.map(row => [row.name, row.context, row.recordCount, row.permitted]), [['game-runtime', 'game-runtime', 1, false]]);
+  assert.equal(contexts.live.checked, false);
   const related = await discoverEngineApi({ operation: 'get_related_types', recordId: record.id, className: 'Button' });
   assert.equal(related.live.checked, false);
   assert.deepEqual(calls, { editor: 0, inspector: 0 });
@@ -107,13 +112,18 @@ test('class member and related-type navigation never dispatch availability or In
 test('navigation refuses instance references instead of mapping them through Inspector', async t => {
   const record = engineRecord(), calls = catalog(t, record);
   const targets = [
-    { operation: 'list_domains' }, { operation: 'list_classes' }, { operation: 'list_namespaces' }, { operation: 'list_modules' }, { operation: 'list_kinds' }, { operation: 'list_visibility' },
+    { operation: 'list_domains' }, { operation: 'list_classes' }, { operation: 'list_namespaces' }, { operation: 'list_modules' }, { operation: 'list_kinds' }, { operation: 'list_visibility' }, { operation: 'list_contexts' },
     { operation: 'list_members', className: 'Button' },
     { operation: 'get_related_types', recordId: record.id }
   ];
   for (const target of targets) {
     await assert.rejects(() => discoverEngineApi({ ...target, reference: { id: 'button', type: 'cc.Button' } }), error => error.code === 'INVALID_ARGUMENT');
   }
+  assert.deepEqual(calls, { editor: 0, inspector: 0 });
+});
+test('context discovery refuses external lookups without indexed context metadata', async t => {
+  const calls = catalog(t, ipcRecord());
+  await assert.rejects(() => discoverEngineApi({ operation: 'list_contexts', namespace: 'editor-ipc' }), error => error.code === 'CATALOG_INDEX_UPGRADE_REQUIRED');
   assert.deepEqual(calls, { editor: 0, inspector: 0 });
 });
 

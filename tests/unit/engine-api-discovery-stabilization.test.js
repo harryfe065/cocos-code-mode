@@ -15,6 +15,8 @@ const engineRecord = () => ({ id: '3.7.3:engine-runtime:cc:Button:inspect:method
 
 function catalog(t, record) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ccp-discovery-stabilization-'));
+  const records = Array.isArray(record) ? record : [record];
+  const first = records[0];
   const previousEditor = global.Editor, previousInspect = ToolsUtils.inspectInstance;
   t.after(() => {
     global.Editor = previousEditor;
@@ -25,16 +27,18 @@ function catalog(t, record) {
   fs.mkdirSync(path.join(root, '.ccp'));
   fs.mkdirSync(catalogRoot);
   fs.mkdirSync(lookupRoot);
-  const domain = `${record.namespace}.${record.domain}`, catalogHash = 'a'.repeat(64);
-  const shard = Buffer.from(JSON.stringify({ records: [record] }));
-  const index = Buffer.from(JSON.stringify({ schemaVersion: 1, version: record.version, catalogHash, domains: [{ name: domain, file: 'records.json', count: 1 }] }));
-  const indexedContexts = record.contextConstraints?.execution;
-  const lookupEntry = { ...record, domain, shard: 0, ...(indexedContexts !== undefined ? { contexts: indexedContexts } : {}), ...(Object.prototype.hasOwnProperty.call(record, 'evidenceStatus') ? { evidenceState: record.evidenceStatus } : {}) };
-  const lookup = Buffer.from(JSON.stringify({ schemaVersion: 1, version: record.version, catalogHash, sourceIndexSha256: hash(index), shards: [{ file: 'records.json', sha256: hash(shard), count: 1, domain }], entries: [lookupEntry] }));
+  const domain = `${first.namespace}.${first.domain}`, catalogHash = 'a'.repeat(64);
+  const shard = Buffer.from(JSON.stringify({ records }));
+  const index = Buffer.from(JSON.stringify({ schemaVersion: 1, version: first.version, catalogHash, domains: [{ name: domain, file: 'records.json', count: records.length }] }));
+  const lookupEntries = records.map(item => {
+    const indexedContexts = item.contextConstraints?.execution;
+    return { ...item, domain, shard: 0, ...(indexedContexts !== undefined ? { contexts: indexedContexts } : {}), ...(Object.prototype.hasOwnProperty.call(item, 'evidenceStatus') ? { evidenceState: item.evidenceStatus } : {}) };
+  });
+  const lookup = Buffer.from(JSON.stringify({ schemaVersion: 1, version: first.version, catalogHash, sourceIndexSha256: hash(index), shards: [{ file: 'records.json', sha256: hash(shard), count: records.length, domain }], entries: lookupEntries }));
   fs.writeFileSync(path.join(catalogRoot, 'records.json'), shard);
   fs.writeFileSync(path.join(catalogRoot, 'index.json'), index);
   fs.writeFileSync(path.join(lookupRoot, 'lookup.json'), lookup);
-  fs.writeFileSync(path.join(root, '.ccp', 'engine-api-catalogs.json'), JSON.stringify({ schemaVersion: 1, catalogs: [{ version: record.version, catalogRoot, lookupRoot, lookupSha256: hash(lookup), catalogHash }] }));
+  fs.writeFileSync(path.join(root, '.ccp', 'engine-api-catalogs.json'), JSON.stringify({ schemaVersion: 1, catalogs: [{ version: first.version, catalogRoot, lookupRoot, lookupSha256: hash(lookup), catalogHash }] }));
   const calls = { editor: 0, inspector: 0 };
   global.Editor = { Project: { path: root }, Message: { request: async () => { calls.editor++; throw new Error('Unexpected editor dispatch'); } } };
   ToolsUtils.inspectInstance = async () => { calls.inspector++; throw new Error('Unexpected Inspector dispatch'); };
@@ -125,11 +129,27 @@ test('evidence discovery groups indexed states without dispatch and omits null e
     assert.deepEqual(nullCalls, { editor: 0, inspector: 0 });
   }
 });
+test('static discovery groups explicit metadata, omits unknown values, and never dispatches', async t => {
+  const records = [
+    { ...engineRecord(), id: '3.7.3:engine-runtime:cc:Button:inspect:method:static', static: true },
+    { ...engineRecord(), id: '3.7.3:engine-runtime:cc:Button:run:method:instance', member: 'run', name: 'run', static: false },
+    { ...engineRecord(), id: '3.7.3:engine-runtime:cc:Button:unknown:method:instance', member: 'unknown', name: 'unknown', static: null },
+  ];
+  const calls = catalog(t, records);
+  const result = await discoverEngineApi({ operation: 'list_static', namespace: 'engine-runtime' });
+  assert.deepEqual(result.records.map(row => [row.namespace, row.static, row.recordCount, row.kind, row.permitted]), [
+    ['engine-runtime', false, 1, 'static-summary', false],
+    ['engine-runtime', true, 1, 'static-summary', false],
+  ]);
+  assert.equal(result.live.checked, false);
+  assert.deepEqual(calls, { editor: 0, inspector: 0 });
+});
+
 
 test('navigation refuses instance references instead of mapping them through Inspector', async t => {
   const record = engineRecord(), calls = catalog(t, record);
   const targets = [
-    { operation: 'list_domains' }, { operation: 'list_classes' }, { operation: 'list_namespaces' }, { operation: 'list_modules' }, { operation: 'list_kinds' }, { operation: 'list_visibility' }, { operation: 'list_contexts' }, { operation: 'list_evidence' },
+    { operation: 'list_domains' }, { operation: 'list_classes' }, { operation: 'list_namespaces' }, { operation: 'list_modules' }, { operation: 'list_kinds' }, { operation: 'list_visibility' }, { operation: 'list_contexts' }, { operation: 'list_evidence' }, { operation: 'list_static' },
     { operation: 'list_members', className: 'Button' },
     { operation: 'get_related_types', recordId: record.id }
   ];
@@ -148,6 +168,12 @@ test('evidence discovery refuses external lookups without indexed evidence metad
   await assert.rejects(() => discoverEngineApi({ operation: 'list_evidence', namespace: 'editor-ipc' }), error => error.code === 'CATALOG_INDEX_UPGRADE_REQUIRED');
   assert.deepEqual(calls, { editor: 0, inspector: 0 });
 });
+test('static discovery refuses external lookups without indexed static metadata', async t => {
+  const calls = catalog(t, ipcRecord());
+  await assert.rejects(() => discoverEngineApi({ operation: 'list_static', namespace: 'editor-ipc' }), error => error.code === 'CATALOG_INDEX_UPGRADE_REQUIRED');
+  assert.deepEqual(calls, { editor: 0, inspector: 0 });
+});
+
 
 test('get_signature exposes stable overload/accessor identities without collapsing type evidence', async t => {
   const record = engineRecord();

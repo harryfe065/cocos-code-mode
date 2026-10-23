@@ -10,7 +10,7 @@ import { openExternalApiCatalog, readBounded, parseCatalogJson } from './externa
 
 export interface EngineDiscoveryArgs {
     category?: string; className?: string; targetVersion?: string; domain?: string;
-    operation?: 'records' | 'list_domains' | 'list_classes' | 'list_namespaces' | 'list_modules' | 'list_kinds' | 'list_visibility' | 'list_contexts' | 'list_evidence' | 'list_members' | 'get_signature' | 'get_related_types' | 'lookup_editor_message' | 'explain_bridge_route' | 'compare_version';
+    operation?: 'records' | 'list_domains' | 'list_classes' | 'list_namespaces' | 'list_modules' | 'list_kinds' | 'list_visibility' | 'list_contexts' | 'list_evidence' | 'list_static' | 'list_members' | 'get_signature' | 'get_related_types' | 'lookup_editor_message' | 'explain_bridge_route' | 'compare_version';
     namespace?: 'engine-runtime' | 'engine-authoring' | 'editor-ipc' | 'bridge';
     kind?: string; module?: string; visibility?: 'public' | 'protected' | 'private' | 'internal';
     context?: string; evidenceState?: string;
@@ -158,7 +158,7 @@ async function discoverWithinDeadline(args: EngineDiscoveryArgs, deadline: numbe
         checkDeadline();
         return output;
     }
-    if (!['records', 'list_domains', 'list_classes', 'list_namespaces', 'list_modules', 'list_kinds', 'list_visibility', 'list_contexts', 'list_evidence', 'list_members', 'get_signature', 'get_related_types', 'compare_version'].includes(operation)) throw new ToolError({ code: 'INVALID_ARGUMENT', status: 400, message: 'Unknown catalog discovery operation.' });
+    if (!['records', 'list_domains', 'list_classes', 'list_namespaces', 'list_modules', 'list_kinds', 'list_visibility', 'list_contexts', 'list_evidence', 'list_static', 'list_members', 'get_signature', 'get_related_types', 'compare_version'].includes(operation)) throw new ToolError({ code: 'INVALID_ARGUMENT', status: 400, message: 'Unknown catalog discovery operation.' });
     if (operation === 'get_related_types' && (typeof args.recordId !== 'string' || !args.recordId || args.recordId.length > 1024)) throw new ToolError({ code: 'INVALID_ARGUMENT', status: 400, message: 'get_related_types requires a bounded exact recordId.' });
     if (operation === 'compare_version') {
         if (typeof args.compareVersion !== 'string' || args.compareVersion === version || !Object.prototype.hasOwnProperty.call(VERSIONS, args.compareVersion)
@@ -233,6 +233,7 @@ async function discoverWithinDeadline(args: EngineDiscoveryArgs, deadline: numbe
             if (operation === 'list_kinds' && entry.kind === undefined) throw new ToolError({ code: 'CATALOG_INDEX_UPGRADE_REQUIRED', status: 409, message: 'Regenerate the approved lookup with kind metadata before listing kinds.' });
             if (operation === 'list_contexts' && entry.contexts === undefined) throw new ToolError({ code: 'CATALOG_INDEX_UPGRADE_REQUIRED', status: 409, message: 'Regenerate the approved lookup with context metadata before listing contexts.' });
             if (operation === 'list_evidence' && entry.evidenceState === undefined) throw new ToolError({ code: 'CATALOG_INDEX_UPGRADE_REQUIRED', status: 409, message: 'Regenerate the approved lookup with evidence metadata before listing evidence.' });
+            if (operation === 'list_static' && entry.static === undefined) throw new ToolError({ code: 'CATALOG_INDEX_UPGRADE_REQUIRED', status: 409, message: 'Regenerate the approved lookup with static metadata before listing static members.' });
             if (args.visibility !== undefined && entry.visibility === undefined) throw new ToolError({ code: 'CATALOG_INDEX_UPGRADE_REQUIRED', status: 409, message: 'Regenerate the approved lookup with explicit visibility metadata before filtering.' });
             if ((args.context !== undefined || args.evidenceState !== undefined) && (args.context !== undefined && entry.contexts === undefined || args.evidenceState !== undefined && entry.evidenceState === undefined)) throw new ToolError({ code: 'CATALOG_INDEX_UPGRADE_REQUIRED', status: 409, message: 'Regenerate lookup context/evidence metadata before filtering.' });
             if (args.recordId !== undefined && entry.id !== args.recordId) continue;
@@ -377,6 +378,18 @@ async function discoverWithinDeadline(args: EngineDiscoveryArgs, deadline: numbe
             else evidence.set(key, { id: `${version}:evidence-index:${key}`, namespace: record.namespace, name: evidenceState, evidenceState, kind: 'evidence-summary', recordCount: 1, permitted: false });
         }
         records.splice(0, records.length, ...[...evidence.values()].sort((a, b) => a.id.localeCompare(b.id)));
+    } else if (operation === 'list_static') {
+        const staticStates = new Map<string, ApiRecord>();
+        for (const record of records) {
+            checkDeadline();
+            const staticIdentity = typeof record.static === 'boolean' ? record.static : null;
+            if (staticIdentity === null) continue;
+            const key = JSON.stringify([record.namespace, staticIdentity]);
+            const existing = staticStates.get(key);
+            if (existing) existing.recordCount = Number(existing.recordCount) + 1;
+            else staticStates.set(key, { id: `${version}:static-index:${key}`, namespace: record.namespace, static: staticIdentity, kind: 'static-summary', recordCount: 1, permitted: false });
+        }
+        records.splice(0, records.length, ...[...staticStates.values()].sort((a, b) => a.id.localeCompare(b.id)));
     } else if (operation === 'get_related_types') {
         if (!records[0]) throw new ToolError({ code: 'TARGET_NOT_FOUND', status: 404, message: 'Record is absent from the selected catalog scope.' });
         const source = external ? ApiRecordSchema.parse({ ...readPage(() => external.readRecord(records[0].id)), permitted: false }) : records[0];

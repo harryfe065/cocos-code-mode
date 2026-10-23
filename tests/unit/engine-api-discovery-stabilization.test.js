@@ -29,7 +29,7 @@ function catalog(t, record) {
   const shard = Buffer.from(JSON.stringify({ records: [record] }));
   const index = Buffer.from(JSON.stringify({ schemaVersion: 1, version: record.version, catalogHash, domains: [{ name: domain, file: 'records.json', count: 1 }] }));
   const indexedContexts = record.contextConstraints?.execution;
-  const lookupEntry = { ...record, domain, shard: 0, ...(indexedContexts !== undefined ? { contexts: indexedContexts } : {}) };
+  const lookupEntry = { ...record, domain, shard: 0, ...(indexedContexts !== undefined ? { contexts: indexedContexts } : {}), ...(Object.prototype.hasOwnProperty.call(record, 'evidenceStatus') ? { evidenceState: record.evidenceStatus } : {}) };
   const lookup = Buffer.from(JSON.stringify({ schemaVersion: 1, version: record.version, catalogHash, sourceIndexSha256: hash(index), shards: [{ file: 'records.json', sha256: hash(shard), count: 1, domain }], entries: [lookupEntry] }));
   fs.writeFileSync(path.join(catalogRoot, 'records.json'), shard);
   fs.writeFileSync(path.join(catalogRoot, 'index.json'), index);
@@ -109,10 +109,27 @@ test('class member and related-type navigation never dispatch availability or In
   assert.deepEqual(calls, { editor: 0, inspector: 0 });
 });
 
+test('evidence discovery groups indexed states without dispatch and omits null evidence', async t => {
+  const record = engineRecord();
+  record.evidenceStatus = 'signatureResolved';
+  const calls = catalog(t, record);
+  const result = await discoverEngineApi({ operation: 'list_evidence', namespace: 'engine-runtime' });
+  assert.deepEqual(result.records.map(row => [row.name, row.evidenceState, row.recordCount, row.permitted]), [['signatureResolved', 'signatureResolved', 1, false]]);
+  assert.equal(result.live.checked, false);
+  assert.deepEqual(calls, { editor: 0, inspector: 0 });
+  for (const evidenceStatus of [null, 'unknown']) {
+    const nullCalls = catalog(t, { ...engineRecord(), evidenceStatus });
+    const omitted = await discoverEngineApi({ operation: 'list_evidence', namespace: 'engine-runtime' });
+    assert.deepEqual(omitted.records, []);
+    assert.equal(omitted.live.checked, false);
+    assert.deepEqual(nullCalls, { editor: 0, inspector: 0 });
+  }
+});
+
 test('navigation refuses instance references instead of mapping them through Inspector', async t => {
   const record = engineRecord(), calls = catalog(t, record);
   const targets = [
-    { operation: 'list_domains' }, { operation: 'list_classes' }, { operation: 'list_namespaces' }, { operation: 'list_modules' }, { operation: 'list_kinds' }, { operation: 'list_visibility' }, { operation: 'list_contexts' },
+    { operation: 'list_domains' }, { operation: 'list_classes' }, { operation: 'list_namespaces' }, { operation: 'list_modules' }, { operation: 'list_kinds' }, { operation: 'list_visibility' }, { operation: 'list_contexts' }, { operation: 'list_evidence' },
     { operation: 'list_members', className: 'Button' },
     { operation: 'get_related_types', recordId: record.id }
   ];
@@ -124,6 +141,11 @@ test('navigation refuses instance references instead of mapping them through Ins
 test('context discovery refuses external lookups without indexed context metadata', async t => {
   const calls = catalog(t, ipcRecord());
   await assert.rejects(() => discoverEngineApi({ operation: 'list_contexts', namespace: 'editor-ipc' }), error => error.code === 'CATALOG_INDEX_UPGRADE_REQUIRED');
+  assert.deepEqual(calls, { editor: 0, inspector: 0 });
+});
+test('evidence discovery refuses external lookups without indexed evidence metadata', async t => {
+  const calls = catalog(t, ipcRecord());
+  await assert.rejects(() => discoverEngineApi({ operation: 'list_evidence', namespace: 'editor-ipc' }), error => error.code === 'CATALOG_INDEX_UPGRADE_REQUIRED');
   assert.deepEqual(calls, { editor: 0, inspector: 0 });
 });
 

@@ -10,7 +10,7 @@ import { openExternalApiCatalog, readBounded, parseCatalogJson } from './externa
 
 export interface EngineDiscoveryArgs {
     category?: string; className?: string; targetVersion?: string; domain?: string;
-    operation?: 'records' | 'list_domains' | 'list_classes' | 'list_namespaces' | 'list_members' | 'get_signature' | 'get_related_types' | 'lookup_editor_message' | 'explain_bridge_route' | 'compare_version';
+    operation?: 'records' | 'list_domains' | 'list_classes' | 'list_namespaces' | 'list_modules' | 'list_members' | 'get_signature' | 'get_related_types' | 'lookup_editor_message' | 'explain_bridge_route' | 'compare_version';
     namespace?: 'engine-runtime' | 'engine-authoring' | 'editor-ipc' | 'bridge';
     kind?: string; module?: string; visibility?: 'public' | 'protected' | 'private' | 'internal';
     context?: string; evidenceState?: string;
@@ -158,7 +158,7 @@ async function discoverWithinDeadline(args: EngineDiscoveryArgs, deadline: numbe
         checkDeadline();
         return output;
     }
-    if (!['records', 'list_domains', 'list_classes', 'list_namespaces', 'list_members', 'get_signature', 'get_related_types', 'compare_version'].includes(operation)) throw new ToolError({ code: 'INVALID_ARGUMENT', status: 400, message: 'Unknown catalog discovery operation.' });
+    if (!['records', 'list_domains', 'list_classes', 'list_namespaces', 'list_modules', 'list_members', 'get_signature', 'get_related_types', 'compare_version'].includes(operation)) throw new ToolError({ code: 'INVALID_ARGUMENT', status: 400, message: 'Unknown catalog discovery operation.' });
     if (operation === 'get_related_types' && (typeof args.recordId !== 'string' || !args.recordId || args.recordId.length > 1024)) throw new ToolError({ code: 'INVALID_ARGUMENT', status: 400, message: 'get_related_types requires a bounded exact recordId.' });
     if (operation === 'compare_version') {
         if (typeof args.compareVersion !== 'string' || args.compareVersion === version || !Object.prototype.hasOwnProperty.call(VERSIONS, args.compareVersion)
@@ -228,6 +228,7 @@ async function discoverWithinDeadline(args: EngineDiscoveryArgs, deadline: numbe
                 pages.indexEntriesRemaining--;
                 if (pages.indexEntriesRemaining < 0) throw new ToolError({ code: 'CATALOG_INDEX_LIMIT', status: 413, message: 'External catalog index scan budget exhausted; narrow the query or explicitly increase maxPages.' });
             }
+            if (operation === 'list_modules' && entry.module === undefined) throw new ToolError({ code: 'CATALOG_INDEX_UPGRADE_REQUIRED', status: 409, message: 'Regenerate the approved lookup with module metadata before listing modules.' });
             if (args.module !== undefined && entry.module === undefined) throw new ToolError({ code: 'CATALOG_INDEX_UPGRADE_REQUIRED', status: 409, message: 'Regenerate the approved lookup with module metadata before filtering by module.' });
             if (args.visibility !== undefined && entry.visibility === undefined) throw new ToolError({ code: 'CATALOG_INDEX_UPGRADE_REQUIRED', status: 409, message: 'Regenerate the approved lookup with explicit visibility metadata before filtering.' });
             if ((args.context !== undefined || args.evidenceState !== undefined) && (args.context !== undefined && entry.contexts === undefined || args.evidenceState !== undefined && entry.evidenceState === undefined)) throw new ToolError({ code: 'CATALOG_INDEX_UPGRADE_REQUIRED', status: 409, message: 'Regenerate lookup context/evidence metadata before filtering.' });
@@ -243,7 +244,7 @@ async function discoverWithinDeadline(args: EngineDiscoveryArgs, deadline: numbe
             if (args.category === 'component_schema' && entry.namespace !== 'engine-runtime') continue;
             if (args.className && (entry.className ?? '').replace(/^cc\./, '') !== args.className.replace(/^cc\./, '')) continue;
             if (args.filter && !`${entry.className ?? ''}.${entry.member ?? entry.name}`.toLowerCase().includes(args.filter.toLowerCase())) continue;
-            records.push({ id: entry.id, namespace: entry.namespace, className: entry.className, member: entry.member, name: entry.name, kind: entry.kind, static: entry.static ?? null });
+            records.push({ id: entry.id, namespace: entry.namespace, module: entry.module, className: entry.className, member: entry.member, name: entry.name, kind: entry.kind, static: entry.static ?? null });
         }
     }
     const installedRecordIds = new Set<string>();
@@ -306,6 +307,17 @@ async function discoverWithinDeadline(args: EngineDiscoveryArgs, deadline: numbe
             else classes.set(key, { id: `${version}:class-index:${key}`, namespace: record.namespace, className: record.className, name: record.className, kind: 'class-summary', recordCount: 1, permitted: false });
         }
         records.splice(0, records.length, ...[...classes.values()].sort((a, b) => a.id.localeCompare(b.id)));
+    } else if (operation === 'list_modules') {
+        const modules = new Map<string, ApiRecord>();
+        for (const record of records) {
+            checkDeadline();
+            if (typeof record.module !== 'string' || !record.module) throw new ToolError({ code: 'CATALOG_INDEX_UPGRADE_REQUIRED', status: 409, message: 'Catalog records lack module metadata required for listing modules.' });
+            const key = JSON.stringify([record.namespace, record.module]);
+            const existing = modules.get(key);
+            if (existing) existing.recordCount = Number(existing.recordCount) + 1;
+            else modules.set(key, { id: `${version}:module-index:${key}`, namespace: record.namespace, module: record.module, name: record.module, kind: 'module-summary', recordCount: 1, permitted: false });
+        }
+        records.splice(0, records.length, ...[...modules.values()].sort((a, b) => a.id.localeCompare(b.id)));
     } else if (operation === 'get_related_types') {
         if (!records[0]) throw new ToolError({ code: 'TARGET_NOT_FOUND', status: 404, message: 'Record is absent from the selected catalog scope.' });
         const source = external ? ApiRecordSchema.parse({ ...readPage(() => external.readRecord(records[0].id)), permitted: false }) : records[0];

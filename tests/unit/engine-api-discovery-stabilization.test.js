@@ -93,6 +93,9 @@ test('class member and related-type navigation never dispatch availability or In
   const modules = await discoverEngineApi({ operation: 'list_modules', namespace: 'engine-runtime' });
   assert.deepEqual(modules.records.map(row => [row.module, row.recordCount, row.permitted]), [['cc/ui', 1, false]]);
   assert.equal(modules.live.checked, false);
+  const kinds = await discoverEngineApi({ operation: 'list_kinds', namespace: 'engine-runtime' });
+  assert.deepEqual(kinds.records.map(row => [row.name, row.recordKind, row.recordCount, row.permitted]), [['method', 'method', 1, false]]);
+  assert.equal(kinds.live.checked, false);
   const related = await discoverEngineApi({ operation: 'get_related_types', recordId: record.id, className: 'Button' });
   assert.equal(related.live.checked, false);
   assert.deepEqual(calls, { editor: 0, inspector: 0 });
@@ -101,7 +104,7 @@ test('class member and related-type navigation never dispatch availability or In
 test('navigation refuses instance references instead of mapping them through Inspector', async t => {
   const record = engineRecord(), calls = catalog(t, record);
   const targets = [
-    { operation: 'list_domains' }, { operation: 'list_classes' }, { operation: 'list_namespaces' }, { operation: 'list_modules' },
+    { operation: 'list_domains' }, { operation: 'list_classes' }, { operation: 'list_namespaces' }, { operation: 'list_modules' }, { operation: 'list_kinds' },
     { operation: 'list_members', className: 'Button' },
     { operation: 'get_related_types', recordId: record.id }
   ];

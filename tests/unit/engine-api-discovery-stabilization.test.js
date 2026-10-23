@@ -11,7 +11,7 @@ const { ToolsUtils } = requireDist('utcp/utils/tools-utils.js');
 const hash = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 const dto = { name: 'ArgsDto', resolution: 'resolved', kind: 'interface', enumValues: null };
 const ipcRecord = () => ({ id: '3.7.3:editor-ipc:scene:inspect:message:instance', version: '3.7.3', namespace: 'editor-ipc', className: null, member: 'inspect', name: 'inspect', kind: 'message', domain: 'scene', signatures: [], permitted: true });
-const engineRecord = () => ({ id: '3.7.3:engine-runtime:cc:Button:inspect:method:instance', version: '3.7.3', namespace: 'engine-runtime', module: 'cc/ui', className: 'Button', member: 'inspect', name: 'inspect', kind: 'method', domain: 'ui', signatures: [], permitted: true });
+const engineRecord = () => ({ id: '3.7.3:engine-runtime:cc:Button:inspect:method:instance', version: '3.7.3', namespace: 'engine-runtime', module: 'cc/ui', className: 'Button', member: 'inspect', name: 'inspect', kind: 'method', visibility: 'public', domain: 'ui', signatures: [], permitted: true });
 
 function catalog(t, record) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ccp-discovery-stabilization-'));
@@ -96,6 +96,9 @@ test('class member and related-type navigation never dispatch availability or In
   const kinds = await discoverEngineApi({ operation: 'list_kinds', namespace: 'engine-runtime' });
   assert.deepEqual(kinds.records.map(row => [row.name, row.recordKind, row.recordCount, row.permitted]), [['method', 'method', 1, false]]);
   assert.equal(kinds.live.checked, false);
+  const visibility = await discoverEngineApi({ operation: 'list_visibility', namespace: 'engine-runtime' });
+  assert.deepEqual(visibility.records.map(row => [row.name, row.visibility, row.recordCount, row.permitted]), [['public', 'public', 1, false]]);
+  assert.equal(visibility.live.checked, false);
   const related = await discoverEngineApi({ operation: 'get_related_types', recordId: record.id, className: 'Button' });
   assert.equal(related.live.checked, false);
   assert.deepEqual(calls, { editor: 0, inspector: 0 });
@@ -104,7 +107,7 @@ test('class member and related-type navigation never dispatch availability or In
 test('navigation refuses instance references instead of mapping them through Inspector', async t => {
   const record = engineRecord(), calls = catalog(t, record);
   const targets = [
-    { operation: 'list_domains' }, { operation: 'list_classes' }, { operation: 'list_namespaces' }, { operation: 'list_modules' }, { operation: 'list_kinds' },
+    { operation: 'list_domains' }, { operation: 'list_classes' }, { operation: 'list_namespaces' }, { operation: 'list_modules' }, { operation: 'list_kinds' }, { operation: 'list_visibility' },
     { operation: 'list_members', className: 'Button' },
     { operation: 'get_related_types', recordId: record.id }
   ];

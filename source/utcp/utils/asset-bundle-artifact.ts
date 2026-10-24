@@ -139,5 +139,5 @@ export async function serveBundleArtifact(artifact: BundleArtifact): Promise<{ u
     await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
     const address = server.address();
     if (!address || typeof address === 'string') { server.close(); throw new ToolError({ code: 'BUNDLE_SERVE_FAILED', status: 502, message: 'Bundle server has no verified loopback endpoint.' }); }
-    return { url: `http://127.0.0.1:${address.port}${route.slice(0, -1)}`, close: () => new Promise<void>((resolve, reject) => { server.close(error => error ? reject(error) : resolve()); server.closeAllConnections(); }) };
+    return { url: `http://127.0.0.1:${address.port}${route.slice(0, -1)}`, close: () => new Promise<void>((resolve, reject) => { server.close(error => error ? reject(error) : resolve()); const closeAllConnections = (server as http.Server & { closeAllConnections?: () => void }).closeAllConnections; closeAllConnections?.call(server); }) };
 }

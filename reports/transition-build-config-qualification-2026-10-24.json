@@ -1,0 +1,69 @@
+{
+  "date": "2026-10-24",
+  "artifact": {
+    "file": "ccp3x-v210-261024-180735.zip",
+    "sha256": "86a01ed4dc42aa7a9e90109bf6c8287a32fcbd5a0b9b8b8344377098a0376b5c",
+    "buildInfo": {
+      "commit": "51205299",
+      "branch": "feat/cocos-pilot-api-capability-expansion",
+      "dirty": false,
+      "builtAt": "2026-10-24T11:07:35.868Z",
+      "mode": "readable"
+    }
+  },
+  "fixture": {
+    "project": "G:/_ws/_helpers/ccp3x-api-qualification-20261011",
+    "creator": "3.7.3",
+    "sourceSceneUuid": "05d3c4ec-c649-44c2-b86f-0834c36e4f7f",
+    "transitionSceneUuid": "77718d84-841b-42ea-8bd4-ac18af523907",
+    "endpoint": "http://localhost:62037"
+  },
+  "sceneTransition": {
+    "positive": {
+      "status": 200,
+      "sessionId": "runtime-1",
+      "previousSceneUuid": "05d3c4ec-c649-44c2-b86f-0834c36e4f7f",
+      "sceneUuid": "77718d84-841b-42ea-8bd4-ac18af523907",
+      "sessionInvalidated": true,
+      "newSessionRequired": true
+    },
+    "staleSessionNegative": {
+      "status": 404,
+      "code": "SESSION_NOT_FOUND"
+    },
+    "expectedUuidMismatchNegative": {
+      "status": 409,
+      "code": "SCENE_TRANSITION_TARGET_MISMATCH",
+      "actualSceneUuid": "05d3c4ec-c649-44c2-b86f-0834c36e4f7f"
+    }
+  },
+  "buildConfig": {
+    "buildPresetAuditPositive": { "status": 200, "valid": true, "complete": true },
+    "buildPresetAuditNegative": { "status": 200, "valid": false, "code": "UNKNOWN_OPTION" },
+    "buildPreflightPositive": { "status": 200, "valid": true, "complete": true, "sceneCount": 1 },
+    "buildPreflightNegative": { "status": 200, "valid": false, "issues": ["INVALID_SCENES", "START_SCENE_NOT_INCLUDED"] },
+    "buildEnvironmentInspect": { "status": 200, "toolchainVerified": false, "signingVerified": false, "javaInspection": "unavailable-editor-api" },
+    "buildProfileList": { "status": 200, "total": 0 },
+    "buildSettingsReadWrite": { "status": 200, "common.debug": "true then restored false" },
+    "buildTaskList": { "status": 200, "workerReady": true, "free": true, "total": 0 },
+    "projectConfigRead": { "status": 200, "readOnly": true },
+    "projectConfigWriteNegative": { "status": 422, "code": "UNSUPPORTED_EDITOR_API", "api": "project/set-config" },
+    "previewStartSceneGet": { "status": 404, "code": "TARGET_NOT_FOUND", "reason": "preview start scene not configured" }
+  },
+  "cleanup": {
+    "transitionSceneDeleted": true,
+    "previewStopped": true,
+    "sourceSceneReopened": true,
+    "temporarySceneFileExists": false,
+    "fixtureExtensionRestored": true,
+    "sourceSceneSha256AfterReplay": "50f32b66cf636574e24e933e75add1c1abe0516361547b92134c5b2bed19ac37",
+    "sourceSceneNodeCountPreviouslyVerified": 4,
+    "note": "Creator reopened the source scene cleanly; current serialized hash differs from the earlier witness hash, so hash identity is not re-credited as unchanged."
+  },
+  "promotion": {
+    "portfolioPromotion": false,
+    "nativeSceneTransitionQualified": true,
+    "buildConfigQualified": false,
+    "reason": "Build config toolchain/signing are explicitly unverified; protected release gates remain open."
+  }
+}

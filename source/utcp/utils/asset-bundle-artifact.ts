@@ -100,8 +100,12 @@ export function resolveBundleArtifact(project: string, requested: string, name: 
             }], execute: function () { } };
         });
     });`;
-    const generated = script.replace(/\n?\/\/# sourceMappingURL=index(?:\.[A-Za-z0-9_-]+)?\.js\.map\s*$/, '').replace(/\s/g, '') === generatedEntry.replace(/\s/g, '');
-    if (script && !generated && (!match || match[1] !== undefined && match[1] !== name)) prerequisite('Bundle index must be empty or an exact emitted data-only System.register entry; project scripts are excluded.');
+    const compact = script.replace(/\n?\/\/# sourceMappingURL=index(?:\.[A-Za-z0-9_-]+)?\.js\.map\s*$/, '').replace(/\s/g, '');
+    const generated = compact === generatedEntry.replace(/\s/g, '');
+    const cocosGeneratedEntry = `System.register("chunks:///_virtual/${name}",[],(function(){return{execute:function(){}}}));`
+        + `(function(r) { r('virtual:///prerequisite-imports/${name}', 'chunks:///_virtual/${name}'); })(function(mid, cid) { System.register(mid, [cid], function (_export, _context) { return { setters: [function(_m) { var _exportObj = {}; for (var _key in _m) { if (_key !== 'default' && _key !== '__esModule') _exportObj[_key] = _m[_key]; _export(_exportObj); }], execute: function() {} }; }); });`;
+    const cocosGenerated = compact === cocosGeneratedEntry.replace(/\s/g, '');
+    if (script && !generated && !cocosGenerated && (!match || match[1] !== undefined && match[1] !== name)) prerequisite('Bundle index must be empty or an exact emitted data-only System.register entry; project scripts are excluded.');
     return { root, name, version, configFile, indexFile, config, index };
 }
 

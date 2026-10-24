@@ -64,7 +64,8 @@ export async function inspectBuildOutputManifest(args: BuildOutputManifestArgs):
         } finally { await fs.close(handle); }
     }
     const after: unknown = await Editor.Message.request('builder', 'query-task', id);
-    if (!object(after) || String(after.id) !== id || after.state !== before.state || !isDeepStrictEqual(after.options, options)) throw new ToolError({ code: 'BUILD_TASK_CHANGED', status: 409, message: 'Task identity/options changed during output inspection.' });
+    const afterOptions = object(after) && object(after.options) ? JSON.parse(JSON.stringify(after.options)) as Record<string, unknown> : null;
+    if (!object(after) || String(after.id) !== id || after.state !== before.state || !afterOptions || !isDeepStrictEqual(afterOptions, options)) throw new ToolError({ code: 'BUILD_TASK_CHANGED', status: 409, message: 'Task identity/options changed during output inspection.' });
     return { taskId: id, platform: options.platform, state: 'success', artifactPath: path.relative(root, realOutput).replace(/\\/g, '/'), files, totalBytes, producerVerified: false,
         verificationScope: 'Successful task options identify output; stable expected-file bytes/hash observed. Producer freshness, package/device/runtime correctness are not inferred.' };
 }

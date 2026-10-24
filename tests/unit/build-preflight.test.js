@@ -2,6 +2,7 @@ const { it, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const { requireDist } = require('../helpers/require-dist');
 const { inspectBuildPreflight, inspectBuildEnvironment } = requireDist('utcp/build-preflight.js');
+const { inspectBuildOutputManifest } = requireDist('utcp/build-output-manifest.js');
 const { manageBuildTaskConfig } = requireDist('utcp/build-task-config.js');
 const options = { platform: 'web-mobile', scenes: [{ uuid: 'scene-1', url: 'db://assets/test.scene' }], startScene: 'scene-1' };
 let stored;
@@ -57,4 +58,29 @@ it('refuses credential-bearing options and reports unconfigured toolchains witho
   assert.equal(result.javaInspection, 'unavailable-editor-api');
   assert.equal(result.toolchainVerified, false);
   assert.equal(JSON.stringify(result).includes('commandArgument'), false);
+});
+it('normalizes optional native task fields before final output-manifest identity comparison', async () => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ccp3x-build-output-'));
+  fs.mkdirSync(path.join(root, 'build', 'web'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'build', 'web', 'index.html'), 'fixture', 'utf8');
+  let queryCount = 0;
+  const taskOptions = { platform: 'web-mobile', buildPath: 'project://build', outputName: 'web' };
+  global.Editor = {
+    Project: { path: root },
+    Message: { request: async (_service, name) => {
+      if (name !== 'query-task') throw new Error(`Unexpected route ${name}`);
+      queryCount++;
+      return { id: '1', state: 'success', options: queryCount === 1 ? taskOptions : { ...taskOptions, optionalNativeField: undefined } };
+    } },
+  };
+  try {
+    const result = await inspectBuildOutputManifest({ taskId: '1', expectedFiles: ['index.html'], maxBytes: 1024 });
+    assert.equal(result.artifactPath, 'build/web');
+    assert.equal(result.files[0].bytes, 7);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });

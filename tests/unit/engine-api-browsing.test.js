@@ -24,6 +24,23 @@ test('catalog browsing groups shard domains and reports pilot coverage without d
     assert.equal(bounded.truncated,true);
   } finally { global.Editor=before; }
 });
+test('get_inheritance reads one installed engine record without dispatch', async () => {
+  const before = global.Editor;
+  global.Editor = { Message: { request: async () => { throw new Error('Inheritance discovery must not dispatch editor IPC'); } } };
+  try {
+    const result = await discoverEngineApi({
+      category: 'engine_api',
+      operation: 'get_inheritance',
+      recordId: '3.7.3:engine-runtime:cc:Button::class:instance',
+      maxEntries: 1,
+    });
+    assert.equal(result.records.length, 1);
+    assert.equal(result.records[0].namespace, 'engine-runtime');
+    assert.ok(Array.isArray(result.records[0].inheritance));
+    assert.equal(result.live.checked, false);
+  } finally { global.Editor = before; }
+});
+
 
 test('navigation refuses mixed instance targets before querying the editor', async () => {
   await assert.rejects(() => discoverEngineApi({category:'engine_api',operation:'list_classes',reference:{id:'node'}}), error=>error.code==='INVALID_ARGUMENT');

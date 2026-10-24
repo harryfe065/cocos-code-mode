@@ -10,7 +10,7 @@ import { openExternalApiCatalog, readBounded, parseCatalogJson } from './externa
 
 export interface EngineDiscoveryArgs {
     category?: string; className?: string; targetVersion?: string; domain?: string;
-    operation?: 'records' | 'list_domains' | 'list_classes' | 'list_namespaces' | 'list_modules' | 'list_kinds' | 'list_visibility' | 'list_contexts' | 'list_evidence' | 'list_static' | 'list_members' | 'get_signature' | 'get_related_types' | 'lookup_editor_message' | 'explain_bridge_route' | 'compare_version';
+    operation?: 'records' | 'list_domains' | 'list_classes' | 'list_namespaces' | 'list_modules' | 'list_kinds' | 'list_visibility' | 'list_contexts' | 'list_evidence' | 'list_static' | 'list_members' | 'get_signature' | 'get_related_types' | 'get_inheritance' | 'lookup_editor_message' | 'explain_bridge_route' | 'compare_version';
     namespace?: 'engine-runtime' | 'engine-authoring' | 'editor-ipc' | 'bridge';
     kind?: string; module?: string; visibility?: 'public' | 'protected' | 'private' | 'internal';
     context?: string; evidenceState?: string;
@@ -135,6 +135,18 @@ async function discoverWithinDeadline(args: EngineDiscoveryArgs, deadline: numbe
         checkDeadline();
         return output;
     }
+    if (operation === 'get_inheritance') {
+        const allowed: Record<string, true> = {
+            category: true, operation: true, targetVersion: true, recordId: true, maxEntries: true, maxBytes: true,
+            timeoutMs: true, maxPages: true, cursor: true,
+        };
+        if (Object.keys(args).some(key => !allowed[key]) || args.category !== undefined && args.category !== 'engine_api') {
+            throw new ToolError({ code: 'INVALID_ARGUMENT', status: 400, message: 'get_inheritance requires only a catalog version, exact recordId and bounded result controls.' });
+        }
+        if (typeof args.recordId !== 'string' || !args.recordId || args.recordId.length > 1024) {
+            throw new ToolError({ code: 'INVALID_ARGUMENT', status: 400, message: 'get_inheritance requires a bounded exact recordId.' });
+        }
+    }
     if (args.kind !== undefined && (typeof args.kind !== 'string' || !args.kind || args.kind.length > 128)) throw new ToolError({ code: 'INVALID_ARGUMENT', status: 400, message: 'kind must be a nonempty string of at most 128 characters.' });
     if (args.kind !== undefined && ['list_domains', 'lookup_editor_message', 'compare_version'].includes(operation)) throw new ToolError({ code: 'INVALID_ARGUMENT', status: 400, message: 'kind is not accepted for this discovery operation.' });
     if (args.module !== undefined && (typeof args.module !== 'string' || !args.module || args.module.length > 256)) throw new ToolError({ code: 'INVALID_ARGUMENT', status: 400, message: 'module must be a nonempty string of at most 256 characters.' });
@@ -158,8 +170,9 @@ async function discoverWithinDeadline(args: EngineDiscoveryArgs, deadline: numbe
         checkDeadline();
         return output;
     }
-    if (!['records', 'list_domains', 'list_classes', 'list_namespaces', 'list_modules', 'list_kinds', 'list_visibility', 'list_contexts', 'list_evidence', 'list_static', 'list_members', 'get_signature', 'get_related_types', 'compare_version'].includes(operation)) throw new ToolError({ code: 'INVALID_ARGUMENT', status: 400, message: 'Unknown catalog discovery operation.' });
+    if (!['records', 'list_domains', 'list_classes', 'list_namespaces', 'list_modules', 'list_kinds', 'list_visibility', 'list_contexts', 'list_evidence', 'list_static', 'list_members', 'get_signature', 'get_related_types', 'get_inheritance', 'compare_version'].includes(operation)) throw new ToolError({ code: 'INVALID_ARGUMENT', status: 400, message: 'Unknown catalog discovery operation.' });
     if (operation === 'get_related_types' && (typeof args.recordId !== 'string' || !args.recordId || args.recordId.length > 1024)) throw new ToolError({ code: 'INVALID_ARGUMENT', status: 400, message: 'get_related_types requires a bounded exact recordId.' });
+    if (operation === 'get_inheritance' && (typeof args.recordId !== 'string' || !args.recordId || args.recordId.length > 1024)) throw new ToolError({ code: 'INVALID_ARGUMENT', status: 400, message: 'get_inheritance requires a bounded exact recordId.' });
     if (operation === 'compare_version') {
         if (typeof args.compareVersion !== 'string' || args.compareVersion === version || !Object.prototype.hasOwnProperty.call(VERSIONS, args.compareVersion)
             || typeof args.recordId !== 'string' || !args.recordId || args.recordId.length > 1024
@@ -188,9 +201,9 @@ async function discoverWithinDeadline(args: EngineDiscoveryArgs, deadline: numbe
     if (args.compareVersion !== undefined || args.compareRecordId !== undefined) throw new ToolError({ code: 'INVALID_ARGUMENT', status: 400, message: 'Comparison selectors require compare_version.' });
     const observesTarget = operation === 'records' || operation === 'get_signature';
     if (args.reference && !observesTarget) throw new ToolError({ code: 'INVALID_ARGUMENT', status: 400, message: 'Catalog navigation does not accept an instance reference.' });
-    if (operation !== 'records' && !['get_signature', 'get_related_types', 'list_members'].includes(operation) && (args.reference || args.recordId || args.category === 'component_schema' || args.className)) throw new ToolError({ code: 'INVALID_ARGUMENT', status: 400, message: 'Catalog navigation does not accept an instance, record or class schema target.' });
+    if (operation !== 'records' && !['get_signature', 'get_related_types', 'get_inheritance', 'list_members'].includes(operation) && (args.reference || args.recordId || args.category === 'component_schema' || args.className)) throw new ToolError({ code: 'INVALID_ARGUMENT', status: 400, message: 'Catalog navigation does not accept an instance, record or class schema target.' });
     if (operation === 'get_signature' && (typeof args.recordId !== 'string' || !args.recordId || args.recordId.length > 1024)) throw new ToolError({ code: 'INVALID_ARGUMENT', status: 400, message: 'get_signature requires a bounded exact recordId.' });
-    if (args.recordId !== undefined && (typeof args.recordId !== 'string' || !args.recordId || args.recordId.length > 1024 || !['records', 'get_signature', 'get_related_types'].includes(operation))) throw new ToolError({ code: 'INVALID_ARGUMENT', status: 400, message: 'recordId requires a record operation and a bounded nonempty identity.' });
+    if (args.recordId !== undefined && (typeof args.recordId !== 'string' || !args.recordId || args.recordId.length > 1024 || !['records', 'get_signature', 'get_related_types', 'get_inheritance'].includes(operation))) throw new ToolError({ code: 'INVALID_ARGUMENT', status: 400, message: 'recordId requires a record operation and a bounded nonempty identity.' });
     const maxEntries = limit(args.maxEntries, 50, 200), maxBytes = limit(args.maxBytes, 32768, 131072);
     const external = openExternalApiCatalog(version);
     checkDeadline();
@@ -287,6 +300,40 @@ async function discoverWithinDeadline(args: EngineDiscoveryArgs, deadline: numbe
         }
     }
     records.sort((a, b) => a.id.localeCompare(b.id));
+    if (operation === 'get_inheritance') {
+        const source = external && records[0]
+            ? ApiRecordSchema.parse({ ...readPage(() => external.readRecord(records[0].id)), permitted: false })
+            : records[0];
+        if (!source) throw new ToolError({ code: 'TARGET_NOT_FOUND', status: 404, message: 'Record inheritance is absent from the selected catalog scope/version.' });
+        if (source.namespace !== 'engine-runtime' && source.namespace !== 'engine-authoring') {
+            throw new ToolError({ code: 'INVALID_ARGUMENT', status: 400, message: 'get_inheritance applies only to engine-runtime and engine-authoring records.' });
+        }
+        if (!Object.prototype.hasOwnProperty.call(source, 'inheritance')) {
+            throw new ToolError({ code: 'CATALOG_INDEX_UPGRADE_REQUIRED', status: 409, message: 'Regenerate and explicitly adopt a catalog containing inheritance metadata.' });
+        }
+        const inheritance = source.inheritance;
+        if (!Array.isArray(inheritance) || inheritance.length > 256
+            || inheritance.some(row => {
+                if (!row || typeof row !== 'object' || Array.isArray(row)) return true;
+                const item = row as Record<string, unknown>;
+                return typeof item.relation !== 'string' || !item.relation.trim()
+                    || typeof item.type !== 'string' || !item.type.trim();
+            })) {
+            throw new ToolError({ code: 'CATALOG_INVALID', status: 502, message: 'Record inheritance metadata is malformed or exceeds 256 rows.' });
+        }
+        const inheritedFrom = source.inheritedFrom;
+        if (inheritedFrom !== undefined && inheritedFrom !== null && typeof inheritedFrom !== 'string') {
+            throw new ToolError({ code: 'CATALOG_INVALID', status: 502, message: 'Record inheritedFrom metadata is malformed.' });
+        }
+        records.splice(0, records.length, {
+            id: source.id, version: typeof source.version === 'string' ? source.version : version, namespace: source.namespace,
+            className: source.className ?? null, member: source.member ?? null, kind: source.kind ?? null,
+            static: typeof source.static === 'boolean' ? source.static : null,
+            semanticKey: typeof source.semanticKey === 'string' ? source.semanticKey : null,
+            inheritance, inheritedFrom: inheritedFrom ?? null,
+            permitted: false, mutationAuthorized: false, runtimeVerified: false, qualified: false,
+        } as ApiRecord);
+    }
     const matchedCatalogTarget = records.length > 0;
     const engineClassTarget = records.length > 0 && records.every(record => record.namespace === 'engine-runtime');
     const exactRecordClass = args.recordId !== undefined ? records[0]?.className : undefined;
@@ -592,7 +639,14 @@ async function discoverWithinDeadline(args: EngineDiscoveryArgs, deadline: numbe
     const selected: ApiRecord[] = [];
     let byteLimited = false;
     const cursorAt = (next: number): string | null => next < records.length ? Buffer.from(JSON.stringify({ hash: index.catalogHash, selector: selectorHash, offset: next })).toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '') : null;
-    const result = (): Record<string, unknown> => ({ version, operation, coverage, catalogHash: index.catalogHash, records: selected, total: records.length, count: selected.length, truncated: offset + selected.length < records.length, truncationReason: offset + selected.length < records.length ? byteLimited ? 'maxBytes' : 'maxEntries' : null, nextCursor: cursorAt(offset + selected.length), live, runtimeVerified: false, qualified: false });
+    const result = (): Record<string, unknown> => ({
+        version, operation, coverage, catalogHash: index.catalogHash, records: selected, total: records.length, count: selected.length,
+        truncated: offset + selected.length < records.length,
+        truncationReason: offset + selected.length < records.length ? byteLimited ? 'maxBytes' : 'maxEntries' : null,
+        nextCursor: cursorAt(offset + selected.length), live,
+        ...(operation === 'get_inheritance' ? { permitted: false, mutationAuthorized: false } : {}),
+        runtimeVerified: false, qualified: false,
+    });
     for (const record of records.slice(offset, offset + maxEntries)) {
         checkDeadline();
         selected.push(external && operation === 'records' ? ApiRecordSchema.parse({ ...readPage(() => external.readRecord(record.id)), permitted: false, writablePath: null }) : record);

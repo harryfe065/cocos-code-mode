@@ -90,6 +90,95 @@ test('source and declaration IPC dependencies share related-entry and serialized
     await assert.rejects(() => discoverEngineApi({ operation: 'get_related_types', recordId: record.id }), error => error.code === 'CATALOG_RELATED_LIMIT' && /1MiB/.test(error.message));
   });
 });
+test('get_inheritance projects bounded direct engine inheritance without native dispatch', async t => {
+  const record = {
+    ...engineRecord(),
+    semanticKey: '["engine-runtime","cc","Button","inspect","method",false]',
+    static: false,
+    inheritance: [{ relation: 'extends', type: 'Component' }, { relation: 'implements', type: 'EventTarget' }],
+    inheritedFrom: 'Component',
+  };
+  const calls = catalog(t, record);
+  const result = await discoverEngineApi({ operation: 'get_inheritance', recordId: record.id, maxEntries: 1 });
+  assert.equal(result.operation, 'get_inheritance');
+  assert.deepEqual(result.records, [{
+    id: record.id, version: '3.7.3', namespace: 'engine-runtime', className: 'Button', member: 'inspect',
+    kind: 'method', static: false, semanticKey: record.semanticKey, inheritance: record.inheritance, inheritedFrom: 'Component',
+    permitted: false, mutationAuthorized: false, runtimeVerified: false, qualified: false,
+  }]);
+  assert.equal(result.total, 1);
+  assert.equal(result.count, 1);
+  assert.equal(result.truncated, false);
+  assert.equal(result.nextCursor, null);
+  assert.equal(result.live.checked, false);
+  assert.equal(result.live.mutationAuthorized, false);
+  assert.equal(result.permitted, false);
+  assert.equal(result.mutationAuthorized, false);
+  assert.equal(result.runtimeVerified, false);
+  assert.equal(result.qualified, false);
+  assert.deepEqual(calls, { editor: 0, inspector: 0 });
+});
+
+test('get_inheritance accepts explicit empty inheritance and preserves null inheritedFrom', async t => {
+  const record = { ...engineRecord(), inheritance: [], inheritedFrom: null };
+  catalog(t, record);
+  const result = await discoverEngineApi({ operation: 'get_inheritance', recordId: record.id });
+  assert.deepEqual(result.records[0].inheritance, []);
+  assert.equal(result.records[0].inheritedFrom, null);
+});
+
+test('get_inheritance fails closed for missing or malformed inheritance metadata', async t => {
+  const cases = [
+    [{ ...engineRecord() }, 'CATALOG_INDEX_UPGRADE_REQUIRED'],
+    [{ ...engineRecord(), inheritance: null }, 'CATALOG_INVALID'],
+    [{ ...engineRecord(), inheritance: [{}] }, 'CATALOG_INVALID'],
+    [{ ...engineRecord(), inheritance: [{ relation: 'extends' }] }, 'CATALOG_INVALID'],
+    [{ ...engineRecord(), inheritance: [{ relation: 'extends', type: 42 }] }, 'CATALOG_INVALID'],
+    [{ ...engineRecord(), inheritance: Array.from({ length: 257 }, () => ({ relation: 'extends', type: 'Base' })) }, 'CATALOG_INVALID'],
+    [{ ...engineRecord(), inheritance: [], inheritedFrom: 42 }, 'CATALOG_INVALID'],
+  ];
+  for (const [record, code] of cases) {
+    await t.test(String(code), async child => {
+      catalog(child, record);
+      await assert.rejects(() => discoverEngineApi({ operation: 'get_inheritance', recordId: record.id }), error => error.code === code);
+    });
+  }
+});
+
+test('get_inheritance rejects non-engine records and selectors before native access', async t => {
+  const record = { ...ipcRecord(), inheritance: [], inheritedFrom: null };
+  const calls = catalog(t, record);
+  await assert.rejects(() => discoverEngineApi({ operation: 'get_inheritance', recordId: record.id }), error => error.code === 'INVALID_ARGUMENT');
+  for (const selector of [
+    { reference: { id: 'node' } }, { className: 'Button' }, { namespace: 'engine-runtime' }, { domain: 'ui' },
+    { member: 'inspect' }, { filter: 'Button' }, { compareVersion: '3.8.8' }, { compareRecordId: record.id },
+  ]) {
+    await assert.rejects(() => discoverEngineApi({ operation: 'get_inheritance', recordId: record.id, ...selector }), error => error.code === 'INVALID_ARGUMENT');
+  }
+  assert.deepEqual(calls, { editor: 0, inspector: 0 });
+});
+test('get_inheritance rejects unbounded exact identities before catalog access', async () => {
+  await assert.rejects(
+    () => discoverEngineApi({ operation: 'get_inheritance', recordId: 'r'.repeat(1025) }),
+    error => error.code === 'INVALID_ARGUMENT',
+  );
+});
+
+
+test('get_inheritance enforces maxBytes without partial success', async t => {
+  const record = { ...engineRecord(), inheritance: [{ relation: 'extends', type: 'B'.repeat(10000) }], inheritedFrom: null };
+  catalog(t, record);
+  await assert.rejects(() => discoverEngineApi({ operation: 'get_inheritance', recordId: record.id, maxBytes: 256 }), error => error.code === 'RESULT_TOO_LARGE');
+});
+
+test('get_inheritance rejects stale cursors using exact catalog selector identity', async t => {
+  const first = { ...engineRecord(), inheritance: [], inheritedFrom: null };
+  const second = { ...engineRecord(), id: '3.7.3:engine-runtime:cc:Button:run:method:instance', member: 'run', name: 'run', inheritance: [], inheritedFrom: null };
+  catalog(t, [first, second]);
+  const page = await discoverEngineApi({ operation: 'records', maxEntries: 1 });
+  await assert.rejects(() => discoverEngineApi({ operation: 'get_inheritance', recordId: first.id, cursor: page.nextCursor }), error => error.code === 'STALE_CURSOR');
+});
+
 
 test('class member and related-type navigation never dispatch availability or Inspector reads', async t => {
   const record = engineRecord(), calls = catalog(t, record);

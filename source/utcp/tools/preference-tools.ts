@@ -8,7 +8,7 @@ import packageJSON from '../../../package.json';
 // persistence of pilot behavior (port, tool profile, envelope).
 
 const KNOWN_KEYS: Record<string, string> = {
-    serverPort: 'number — UTCP HTTP server port (0 = auto)',
+    fixedServerPort: 'integer — UTCP HTTP server port (0 = auto)',
     toolProfile: 'string — "core" | "full" | "custom"',
     enabledTools: 'string[] — extra tools exposed when profile=core/custom',
     disabledTools: 'string[] — tools hidden even in profile=full',
@@ -80,6 +80,10 @@ export class PreferenceTools {
         // Light type validation for known keys
         if (args.key in KNOWN_KEYS) {
             const expected = KNOWN_KEYS[args.key].split(' ')[0];
+            if (expected === 'integer'
+                && (!Number.isInteger(args.value) || args.value < 0 || args.value > 65535)) {
+                throw new Error(`Key '${args.key}' expects an integer from 0 to 65535`);
+            }
             if (expected === 'number' && typeof args.value !== 'number') throw new Error(`Key '${args.key}' expects a number`);
             if (expected === 'string' && typeof args.value !== 'string') throw new Error(`Key '${args.key}' expects a string`);
             if (expected === 'boolean' && typeof args.value !== 'boolean') throw new Error(`Key '${args.key}' expects a boolean`);

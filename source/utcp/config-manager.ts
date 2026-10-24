@@ -137,8 +137,16 @@ export class UtcpConfigManager {
     async getCurrentPort(): Promise<number> {
         const port = await Editor.Profile.getConfig(packageJSON.name, 'fixedServerPort');
         if (port === undefined || port === null) return 0;
-        if (typeof port !== 'number' || !Number.isInteger(port) || port < 0 || port > 65535) throw new Error('fixedServerPort must be an integer from 0 to 65535.');
-        return port;
+        // Older generic preference writes could persist the numeric port as a string; canonicalize it once.
+        const normalized = typeof port === 'string' && /^\d+$/.test(port.trim()) ? Number(port.trim()) : port;
+        if (typeof normalized === 'number' && Number.isInteger(normalized) && normalized >= 0 && normalized <= 65535) {
+            if (normalized !== port) await Editor.Profile.setConfig(packageJSON.name, 'fixedServerPort', normalized);
+            return normalized;
+        }
+        console.warn('[cx3][config] Invalid fixedServerPort preference; resetting to automatic port selection.');
+        try { await Editor.Profile.setConfig(packageJSON.name, 'fixedServerPort', 0); }
+        catch (error) { console.warn(`[cx3][config] Could not reset fixedServerPort: ${error instanceof Error ? error.message : String(error)}`); }
+        return 0;
     }
     async setConfiguredPort(port: number): Promise<void> {
         if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error('Port must be an integer from 0 to 65535.');

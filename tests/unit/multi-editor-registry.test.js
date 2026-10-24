@@ -94,6 +94,24 @@ it('ignores legacy serverPort while fixedServerPort remains explicit', async () 
     await assert.rejects(manager.setConfiguredPort(-1));
   } finally { global.Editor = original; }
 });
+it('normalizes numeric fixedServerPort values and recovers malformed preferences', async () => {
+  const original = global.Editor;
+  const writes = [];
+  const values = { fixedServerPort: '42500' };
+  global.Editor = {
+    Profile: {
+      getConfig: async (_package, key) => values[key],
+      setConfig: async (_package, key, value) => { values[key] = value; writes.push([key, value]); },
+    },
+  };
+  try {
+    const manager = UtcpConfigManager.getInstance();
+    assert.equal(await manager.getCurrentPort(), 42500);
+    values.fixedServerPort = 'not-a-port';
+    assert.equal(await manager.getCurrentPort(), 0);
+    assert.deepEqual(writes, [['fixedServerPort', 42500], ['fixedServerPort', 0]]);
+  } finally { global.Editor = original; }
+});
 
 it('internal publication preserves offline authenticated relay registrations and refuses their port', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ccp-protected-registry-'));

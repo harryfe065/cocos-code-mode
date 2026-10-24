@@ -94,6 +94,13 @@ export function isStatus(value: unknown): value is Status {
 }
 const registryLabels = { matched: 'Matched this instance', missing: 'Missing', mismatch: 'Mismatch', error: 'Error', 'not-running': 'Not checked — server stopped' };
 const httpLabels = { ok: 'Verified this instance', error: 'Error', 'not-running': 'Not checked — server stopped' };
+export function formatElapsed(ageMs: number): string {
+    const seconds = Math.floor(ageMs / 1000);
+    if (seconds < 60) return `${seconds}s`;
+    const minutes = Math.floor(seconds / 60);
+    if (minutes < 60) return `${minutes}m`;
+    return `${Math.floor(minutes / 60)}h`;
+}
 export function renderStatus(container: HTMLElement, snapshot: Status | null): void {
     const build = snapshot?.build;
     const server = snapshot?.server;
@@ -111,7 +118,7 @@ export function renderStatus(container: HTMLElement, snapshot: Status | null): v
         ['State', snapshot.activity.activeCount > 0 ? `Processing — ${snapshot.activity.activeCount} request${snapshot.activity.activeCount === 1 ? '' : 's'}` : 'Ready · Idle'],
         ['Active requests', `${snapshot.activity.activeCount}${snapshot.activity.overflowCount ? ` (+${snapshot.activity.overflowCount} hidden)` : ''}`],
         ['Sessions', `${activeSessionCount} active · ${staleSessionCount} stale · ${expiredSessionCount} expired`],
-        ['Since last tool request', snapshot.activity.lastReceived ? `${Math.floor(snapshot.activity.lastReceived.ageMs / 1000)}s ago · ${snapshot.activity.lastReceived.tool}` : 'No tool request received'],
+        ['Since last tool request', snapshot.activity.lastReceived ? `${formatElapsed(snapshot.activity.lastReceived.ageMs)} ago · ${snapshot.activity.lastReceived.tool}` : 'No tool request received'],
     ] : [['State', 'Unavailable']];
     const startup = snapshot?.startupFailure;
     const groups: Array<[string, Array<[string, string | null | undefined]>]> = [

@@ -346,4 +346,10 @@ describe('Game View authority and deadline boundaries', () => {
     assert.equal(validation.runtime.paused, undefined);
     assert.equal(validation.runtime.timeScale, undefined);
   });
+  it('rejects malformed or traversal scene transitions before touching the runtime session', async () => {
+    const runtime = new RuntimeTools();
+    await assert.rejects(runtime.runtimeSceneTransition({ sessionId: '', sceneName: 'main' }), { code: 'INVALID_ARGUMENT', status: 400 });
+    await assert.rejects(runtime.runtimeSceneTransition({ sessionId: 'session-1', sceneName: '../outside' }), { code: 'INVALID_ARGUMENT', status: 400 });
+    await assert.rejects(runtime.runtimeSceneTransition({ sessionId: 'session-1', sceneName: 'main', timeoutMs: 499 }), { code: 'INVALID_ARGUMENT', status: 400 });
+  });
 });

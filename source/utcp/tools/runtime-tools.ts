@@ -1,7 +1,7 @@
 import { createHash } from 'crypto';
 import { utcpTool } from '../decorators';
 import { ToolError } from '../tool-error';
-import { executeGameViewOperation, setGameViewTimeScale } from '../utils/game-view-transport';
+import { executeGameViewOperation, executeGameViewSceneTransition, setGameViewTimeScale } from '../utils/game-view-transport';
 import { RuntimePreviewResult, RuntimeSessionTools } from './runtime-session-tools';
 import { observeRuntimeNode } from '../../runtime-node-observe';
 import { unitQuaternion, orientationMatches } from '../utils/node-orientation';
@@ -226,5 +226,61 @@ export class RuntimeTools {
     )
     async runtimeSessionManage(args: PreviewArgs): Promise<RuntimePreviewResult> {
         return sessions.previewControl(args);
+    }
+
+    @utcpTool(
+        'runtimeSceneTransition',
+        'Load one exact named scene in the attached Creator 3.7.3 Game View, verify the new runtime scene identity, and invalidate the old session handle. Attach a new session before further node/component operations.',
+        {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+                sessionId: { type: 'string', minLength: 1, maxLength: 64 },
+                sceneName: { type: 'string', minLength: 1, maxLength: 256, pattern: '^[A-Za-z0-9_./-]+$' },
+                expectedSceneUuid: { type: 'string', minLength: 1, maxLength: 256 },
+                timeoutMs: { type: 'integer', minimum: 500, maximum: 10000 },
+            },
+            required: ['sessionId', 'sceneName'],
+        },
+        {
+            type: 'object',
+            properties: {
+                success: { type: 'boolean', const: true },
+                sessionId: { type: 'string' },
+                targetId: { type: 'string' },
+                previousSceneUuid: { type: 'string' },
+                sceneUuid: { type: 'string' },
+                sceneName: { type: 'string' },
+                sessionInvalidated: { type: 'boolean', const: true },
+                newSessionRequired: { type: 'boolean', const: true },
+            },
+            required: ['success', 'sessionId', 'targetId', 'previousSceneUuid', 'sceneUuid', 'sceneName', 'sessionInvalidated', 'newSessionRequired'],
+        },
+        'POST',
+        ['runtime', 'scene', 'transition', 'load', 'game-view'],
+    )
+    async runtimeSceneTransition(args: { sessionId: string; sceneName: string; expectedSceneUuid?: string; timeoutMs?: number }): Promise<Record<string, unknown>> {
+        if (!args || typeof args.sessionId !== 'string' || !args.sessionId.trim() || args.sessionId.length > 64
+            || typeof args.sceneName !== 'string' || !/^[A-Za-z0-9_./-]{1,256}$/.test(args.sceneName) || args.sceneName.split('/').some(part => part === '.' || part === '..')
+            || args.expectedSceneUuid !== undefined && (typeof args.expectedSceneUuid !== 'string' || !args.expectedSceneUuid.trim() || args.expectedSceneUuid.length > 256)
+            || !Number.isInteger(args.timeoutMs ?? 5000) || (args.timeoutMs ?? 5000) < 500 || (args.timeoutMs ?? 5000) > 10000) {
+            throw new ToolError({ code: 'INVALID_ARGUMENT', status: 400, message: 'runtimeSceneTransition requires a bounded session, scene name and timeout.' });
+        }
+        const timeoutMs = args.timeoutMs ?? 5000;
+        const inspected = await sessions.runtimeSessionLifecycle({ operation: 'inspect', sessionId: args.sessionId, timeoutMs });
+        const session = inspected.session;
+        if (!inspected.ready || !session || !('status' in session) || session.status !== 'attached' || session.targetKind !== 'game-view' || session.sessionId !== args.sessionId || typeof session.targetId !== 'string') {
+            throw new ToolError({ code: 'RUNTIME_NOT_READY', status: 409, message: 'An attached Game View session is required for scene transition.' });
+        }
+        const request = `new Promise((resolve, reject) => { let settled = false; const finish = (error) => { if (settled) return; settled = true; if (error) reject(error); else resolve(true); }; const accepted = globalThis.cc.director.loadScene(${JSON.stringify(args.sceneName)}, finish); if (accepted === false) finish(new Error('Creator rejected scene load')); })`;
+        const transition = await executeGameViewSceneTransition(session.targetId, request, timeoutMs);
+        if (!transition || typeof transition !== 'object' || Array.isArray(transition)) throw new ToolError({ code: 'INVALID_RUNTIME_RESPONSE', status: 502, message: 'Scene transition returned no bounded identity.' });
+        const result = transition as Record<string, unknown>;
+        if (typeof result.sceneUuid !== 'string' || !result.sceneUuid.trim() || result.sceneUuid.length > 256) throw new ToolError({ code: 'INVALID_RUNTIME_RESPONSE', status: 502, message: 'Scene transition returned an invalid new scene identity.' });
+        await sessions.runtimeSessionLifecycle({ operation: 'reset', sessionId: args.sessionId });
+        if (args.expectedSceneUuid !== undefined && result.sceneUuid !== args.expectedSceneUuid) {
+            throw new ToolError({ code: 'SCENE_TRANSITION_TARGET_MISMATCH', status: 409, message: 'Loaded scene UUID did not match expectedSceneUuid.', details: { expectedSceneUuid: args.expectedSceneUuid, sceneUuid: result.sceneUuid } });
+        }
+        return { success: true, sessionId: args.sessionId, targetId: session.targetId, previousSceneUuid: session.targetId, sceneUuid: result.sceneUuid, sceneName: args.sceneName, sessionInvalidated: true, newSessionRequired: true };
     }
 }

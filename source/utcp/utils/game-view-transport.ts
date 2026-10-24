@@ -258,3 +258,35 @@ export async function executeGameViewOperation(targetId: string, operationSource
         throw new ToolError({ code: error instanceof ToolError ? error.code : 'RUNTIME_CONTROL_UNAVAILABLE', status: 409, message: 'Game View mutation complete read-back is unconfirmed.', details: { mutationDispatched: true, retrySafe: false, outcome: 'unknown' }, recovery: 'Inspect the bound target before further control.' });
     }
 }
+
+/** Internal trusted scene-transition executor. Unlike ordinary mutations, the expected scene identity is allowed to change exactly once. */
+export async function executeGameViewSceneTransition(targetId: string, operationSource: string, timeoutMs = 10000, callerDeadline?: number, assertActive?: () => void): Promise<unknown> {
+    if (typeof targetId !== 'string' || !targetId || targetId.length > 256 || typeof operationSource !== 'string' || Buffer.byteLength(operationSource, 'utf8') > 128 * 1024
+        || !Number.isInteger(timeoutMs) || timeoutMs < 100 || timeoutMs > 10000 || callerDeadline !== undefined && !Number.isFinite(callerDeadline)) {
+        throw new ToolError({ code: 'INVALID_ARGUMENT', status: 400, message: 'Invalid bounded Game View scene transition.' });
+    }
+    const deadline = Math.min(Date.now() + timeoutMs, callerDeadline ?? Infinity);
+    assertActive?.();
+    const electron = require('electron') as ElectronHost;
+    const main = creatorMainWindow(electron).webContents;
+    const host = await readHost(main, deadline);
+    const target = renderer(electron, host);
+    const url = target.getURL();
+    const before = runningState(host, target, await executeBounded(target, RUNTIME_INSPECTION, deadline));
+    if (before.sceneUuid !== targetId) throw new ToolError({ code: 'RUNTIME_TARGET_CHANGED', status: 409, message: 'Game View scene differs from the bound session.' });
+    assertHostUnchanged(electron, await readHost(main, deadline), target, url);
+    assertActive?.();
+    const source = `(async () => { const before = globalThis.cc?.director?.getScene(); if (globalThis.cc?.GAME_VIEW !== true || !before || before.uuid !== ${JSON.stringify(targetId)} || Date.now() >= ${deadline}) throw new Error('Game View target/deadline changed before scene transition'); const result = await (${operationSource}); const after = globalThis.cc?.director?.getScene(); if (!after || after === before || typeof after.uuid !== 'string' || !after.uuid) throw new Error('Scene transition did not produce a new runtime scene'); return { result, sceneUuid: after.uuid }; })()`;
+    try {
+        const result = await executeBounded(target, source, deadline, true, timeoutMs);
+        const encoded = JSON.stringify(result);
+        if (encoded === undefined || Buffer.byteLength(encoded, 'utf8') > 256 * 1024) throw new ToolError({ code: 'RUNTIME_RESPONSE_LIMIT', status: 502, message: 'Game View scene transition result is not bounded JSON.' });
+        const afterHost = await readHost(main, deadline);
+        assertHostUnchanged(electron, afterHost, target, url);
+        const after = runningState(afterHost, target, await executeBounded(target, RUNTIME_INSPECTION, deadline));
+        if (after.sceneUuid === targetId) throw new ToolError({ code: 'SCENE_TRANSITION_UNCONFIRMED', status: 409, message: 'Game View remained on the original scene after transition.' });
+        return { ...(result as Record<string, unknown>), targetId, previousSceneUuid: targetId, sceneUuid: after.sceneUuid, sessionInvalidated: true };
+    } catch (error) {
+        throw new ToolError({ code: error instanceof ToolError ? error.code : 'SCENE_TRANSITION_UNCONFIRMED', status: error instanceof ToolError ? error.status : 409, message: error instanceof ToolError ? error.message : 'Game View scene transition was dispatched but its new scene identity was not confirmed.', details: { mutationDispatched: true, retrySafe: false, outcome: 'unknown' }, recovery: 'Inspect the running Game View and attach a new runtime session before retrying.' });
+    }
+}

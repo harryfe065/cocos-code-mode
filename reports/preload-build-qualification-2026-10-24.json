@@ -1,0 +1,73 @@
+{
+  "date": "2026-10-24",
+  "artifact": {
+    "file": "ccp3x-v210-261024-185315.zip",
+    "sha256": "7461ec9d6f66d94c8ca930ef0cfbe09c03d0b11011c43f6f4bf516ab9f7cbc4d",
+    "buildInfo": {
+      "commit": "a02b6099",
+      "branch": "feat/cocos-pilot-api-capability-expansion",
+      "dirty": false,
+      "builtAt": "2026-10-24T11:53:15.814Z",
+      "mode": "readable"
+    }
+  },
+  "preload": {
+    "artifactCommit": "82946d34",
+    "sessionId": "runtime-1",
+    "sourceSceneUuid": "05d3c4ec-c649-44c2-b86f-0834c36e4f7f",
+    "targetSceneName": "__ccp3x_preload_scene_20261024__",
+    "targetSceneUuid": "64b236bc-b0cd-4080-8d55-8777bd5cc8cc",
+    "positive": {
+      "status": 200,
+      "sceneUnchanged": true,
+      "preloaded": true,
+      "writes": false,
+      "progress": [
+        { "completed": 1, "total": 3, "ratio": 0.3333333333333333 },
+        { "completed": 2, "total": 3, "ratio": 0.6666666666666666 },
+        { "completed": 3, "total": 3, "ratio": 1 }
+      ]
+    },
+    "negative": { "status": 400, "code": "INVALID_ARGUMENT", "case": "path traversal" },
+    "chain": { "transitionStatus": 200, "sceneUuid": "64b236bc-b0cd-4080-8d55-8777bd5cc8cc", "sessionInvalidated": true }
+  },
+  "build": {
+    "artifactCommit": "a02b6099",
+    "taskId": "1792842361640",
+    "triggerOutcome": "BUILD_SUBMISSION_OUTCOME_UNKNOWN",
+    "queueInspection": { "workerReady": true, "free": true, "state": "processing" },
+    "wait": { "completed": true, "timedOut": false, "state": "success", "progress": 1 },
+    "outputManifest": {
+      "status": 200,
+      "artifactPath": "build/web-mobile",
+      "files": [
+        { "path": "index.html", "bytes": 2087, "sha256": "2147e1af19e71b7e3af7372367430db2df9f36d5861611ecf3e1a0aa3016434e" },
+        { "path": "src/settings.json", "bytes": 28309, "sha256": "8e01b93c2ac9767dfba9d9802ae356d907216e3a4d460a80977b5a8401b983d0" },
+        { "path": "assets/main/config.json", "bytes": 2703, "sha256": "9bae767cf487fe1e4c3f7510a3bb7650e15064d002a6268c440588456b27df8c" },
+        { "path": "assets/main/index.js", "bytes": 15513, "sha256": "a67deed58e7be867fc4516f84d50c31c1ad28221d1aa3ae7109050d25a532eaa" }
+      ],
+      "totalBytes": 48612,
+      "producerVerified": false
+    },
+    "artifactServeSmoke": { "serve": 200, "smoke": 200, "statusCode": 200, "bytes": 2087, "contentMatched": true, "passed": true },
+    "negative": { "initialManifestStatus": 409, "code": "BUILD_TASK_CHANGED", "cause": "native task response contains optional undefined fields; fixed by JSON-normalizing final options" }
+  },
+  "bundle": {
+    "status": "blocked",
+    "reason": "built output exposes builtin main bundle only; assetBundleArtifactInspect intentionally rejects builtin bundle and no custom bundle fixture exists",
+    "nextPrerequisite": "create an owned custom Asset Bundle folder and rebuild before runtime load/release qualification"
+  },
+  "persistentRoot": {
+    "status": "blocked",
+    "reason": "docs confirm add/remove but no authoritative bounded inspect contract and no two-scene ownership fixture",
+    "noSyntheticRouteAdded": true
+  },
+  "cleanup": {
+    "sourceSceneReopened": true,
+    "temporarySceneFileExists": false,
+    "buildDirectoryExists": false,
+    "extensionRestored": true,
+    "sourceSceneSha256": "50f32b66cf636574e24e933e75add1c1abe0516361547b92134c5b2bed19ac37"
+  },
+  "promotion": { "portfolioReady": false, "promoted": false }
+}

@@ -30,7 +30,7 @@ describe('asset bundle artifact validation', () => {
       importBase: 'import',
       nativeBase: 'native',
     }));
-    fs.writeFileSync(path.join(root, 'index.js'), `System.register("chunks:///_virtual/${name}",[],(function(){return{execute:function(){}}}));\n\n(function(r) {\n  r('virtual:///prerequisite-imports/${name}', 'chunks:///_virtual/${name}'); \n})(function(mid,cid) { System.register(mid, [cid], function(_export,_context) { return { setters: [function(_m) { var _exportObj = {}; for (var _key in _m) { if (_key !== 'default' && _key !== '__esModule') _exportObj[_key] = _m[_key]; _export(_exportObj); }], execute: function() {} }; }); });`);
+    fs.writeFileSync(path.join(root, 'index.js'), `System.register("chunks:///_virtual/${name}",[],(function(){return{execute:function(){}}}));\n\n(function(r) {\n  r('virtual:///prerequisite-imports/${name}', 'chunks:///_virtual/${name}'); \n})(function(mid, cid) { System.register(mid, [cid], function (_export, _context) { return { setters: [function(_m) { var _exportObj = {}; for (var _key in _m) { if (_key !== "default" && _key !== "__esModule") _exportObj[_key] = _m[_key]; } _export(_exportObj); }], execute: function () { } }; }); });`);
 
     const artifact = resolveBundleArtifact(project, `build/web-mobile/assets/${name}`, name);
     assert.equal(artifact.name, name);

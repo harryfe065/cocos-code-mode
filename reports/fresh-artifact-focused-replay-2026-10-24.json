@@ -1,0 +1,61 @@
+{
+  "date": "2026-10-24",
+  "artifact": {
+    "file": "ccp3x-v210-261024-173549.zip",
+    "sha256": "63aa29d6ba62df1295500a4173cc63d03f951ae5bde0d8371b4782dc2514eba0",
+    "buildInfo": {
+      "commit": "1a5affae",
+      "branch": "feat/cocos-pilot-api-capability-expansion",
+      "dirty": false,
+      "builtAt": "2026-10-24T10:35:49.177Z",
+      "mode": "readable"
+    }
+  },
+  "fixture": {
+    "project": "G:/_ws/_helpers/ccp3x-api-qualification-20261011",
+    "creator": "3.7.3",
+    "scene": "05d3c4ec-c649-44c2-b86f-0834c36e4f7f",
+    "endpoint": "http://localhost:62037"
+  },
+  "replay": {
+    "installedArtifactBuildInfoVerified": true,
+    "focusedTestFiles": 5,
+    "tests": 22,
+    "passed": 16,
+    "failed": 6,
+    "skipped": 0,
+    "cancelled": 0,
+    "failures": {
+      "skeletalAnimationInspectValidate": "ANIMATION_METADATA_INVALID from stale hard-coded node fixture",
+      "spriteAtlasConfigure": "TARGET_NOT_FOUND for stale hard-coded atlas fixture",
+      "materialEdit": "INTERNAL_ERROR during native material assetCreate",
+      "animationGraphCreateInspectEdit": "INTERNAL_ERROR during native graph assetCreate",
+      "uiFallback": "Creator 3.7 component lock/read-back and scroll hierarchy postcondition failures"
+    },
+    "passes": [
+      "asset importer settings positive and read-only negative",
+      "prefab override persistence/rollback",
+      "skeleton and clip metadata comparison",
+      "Canvas/UI creation fallback and most UI lifecycle workflows",
+      "asset create/import/save/delete round-trip"
+    ]
+  },
+  "cleanup": {
+    "sceneReopened": true,
+    "sceneUuid": "05d3c4ec-c649-44c2-b86f-0834c36e4f7f",
+    "dirty": false,
+    "nodeCount": 4
+  },
+  "promotion": {
+    "portfolioReady": false,
+    "approved": 70,
+    "required": 82,
+    "promoted": false
+  },
+  "limitations": [
+    "No native Canvas/Skeletal/Atlas fixture exists in the approved scene for stale fixture-based tests.",
+    "Graph edit and material source persistence/reopen remain explicitly unsupported native contracts.",
+    "npm audit is blocked by absent root package-lock.json.",
+    "Signing, provenance manifest, dependency/license/secret scan, protected publish, and owner approval remain pending."
+  ]
+}

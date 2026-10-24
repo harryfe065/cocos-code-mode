@@ -229,6 +229,68 @@ export class RuntimeTools {
     }
 
     @utcpTool(
+        'runtimeScenePreload',
+        'Preload one named scene in the attached Creator 3.7.3 Game View without changing the active scene. Returns bounded native progress samples and preserves the session identity.',
+        {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+                sessionId: { type: 'string', minLength: 1, maxLength: 64 },
+                sceneName: { type: 'string', minLength: 1, maxLength: 256, pattern: '^[A-Za-z0-9_./-]+$' },
+                timeoutMs: { type: 'integer', minimum: 500, maximum: 10000 },
+                maxProgressSamples: { type: 'integer', minimum: 1, maximum: 64, default: 32 },
+            },
+            required: ['sessionId', 'sceneName'],
+        },
+        {
+            type: 'object',
+            properties: {
+                success: { type: 'boolean', const: true },
+                sessionId: { type: 'string' },
+                targetId: { type: 'string' },
+                sceneName: { type: 'string' },
+                sceneUnchanged: { type: 'boolean', const: true },
+                preloaded: { type: 'boolean', const: true },
+                progress: { type: 'array', maxItems: 64 },
+                progressTruncated: { type: 'boolean' },
+                writes: { type: 'boolean', const: false },
+            },
+            required: ['success', 'sessionId', 'targetId', 'sceneName', 'sceneUnchanged', 'preloaded', 'progress', 'progressTruncated', 'writes'],
+        },
+        'POST',
+        ['runtime', 'scene', 'preload', 'progress', 'read-only'],
+    )
+    async runtimeScenePreload(args: { sessionId: string; sceneName: string; timeoutMs?: number; maxProgressSamples?: number }): Promise<Record<string, unknown>> {
+        const timeoutMs = args?.timeoutMs ?? 5000;
+        const maxProgressSamples = args?.maxProgressSamples ?? 32;
+        if (!args || typeof args.sessionId !== 'string' || !args.sessionId.trim() || args.sessionId.length > 64
+            || typeof args.sceneName !== 'string' || !/^[A-Za-z0-9_./-]{1,256}$/.test(args.sceneName) || args.sceneName.split('/').some(part => part === '.' || part === '..')
+            || !Number.isInteger(timeoutMs) || timeoutMs < 500 || timeoutMs > 10000
+            || !Number.isInteger(maxProgressSamples) || maxProgressSamples < 1 || maxProgressSamples > 64) {
+            throw new ToolError({ code: 'INVALID_ARGUMENT', status: 400, message: 'runtimeScenePreload requires a bounded session, scene name, timeout and progress cap.' });
+        }
+        const inspected = await sessions.runtimeSessionLifecycle({ operation: 'inspect', sessionId: args.sessionId, timeoutMs });
+        const session = inspected.session;
+        if (!inspected.ready || !session || !('status' in session) || session.status !== 'attached' || session.targetKind !== 'game-view' || session.sessionId !== args.sessionId || typeof session.targetId !== 'string') {
+            throw new ToolError({ code: 'RUNTIME_NOT_READY', status: 409, message: 'An attached Game View session is required for scene preload.' });
+        }
+        const request = `new Promise((resolve, reject) => { const samples = []; let settled = false; const push = (completed, total) => { if (samples.length >= ${maxProgressSamples}) return; if (Number.isFinite(completed) && Number.isFinite(total) && total >= 0 && completed >= 0 && completed <= total) samples.push({ completed, total, ratio: total === 0 ? 1 : completed / total }); }; const finish = (error) => { if (settled) return; settled = true; if (error) reject(error); else resolve({ samples }); }; const accepted = globalThis.cc.director.preloadScene(${JSON.stringify(args.sceneName)}, push, finish); if (accepted === false) finish(new Error('Creator rejected scene preload')); })`;
+        const result = await executeGameViewOperation(session.targetId, request, timeoutMs, false);
+        if (!result || typeof result !== 'object' || Array.isArray(result) || !('samples' in result) || !Array.isArray((result as { samples?: unknown }).samples)) {
+            throw new ToolError({ code: 'INVALID_RUNTIME_RESPONSE', status: 502, message: 'Scene preload returned no bounded progress result.' });
+        }
+        const samples = (result as { samples: unknown[] }).samples;
+        if (samples.length > maxProgressSamples || samples.some(sample => !sample || typeof sample !== 'object' || Array.isArray(sample))) {
+            throw new ToolError({ code: 'INVALID_RUNTIME_RESPONSE', status: 502, message: 'Scene preload returned malformed progress samples.' });
+        }
+        const after = await sessions.runtimeSessionLifecycle({ operation: 'inspect', sessionId: args.sessionId, timeoutMs });
+        if (!after.ready || !after.session || !('status' in after.session) || after.session.status !== 'attached' || after.session.sessionId !== session.sessionId || after.session.targetId !== session.targetId || after.session.createdAt !== session.createdAt) {
+            throw new ToolError({ code: 'RUNTIME_TARGET_CHANGED', status: 409, message: 'Runtime session changed during scene preload.' });
+        }
+        return { success: true, sessionId: session.sessionId, targetId: session.targetId, sceneName: args.sceneName, sceneUnchanged: true, preloaded: true, progress: samples, progressTruncated: samples.length >= maxProgressSamples, writes: false };
+    }
+
+    @utcpTool(
         'runtimeSceneTransition',
         'Load one exact named scene in the attached Creator 3.7.3 Game View, verify the new runtime scene identity, and invalidate the old session handle. Attach a new session before further node/component operations.',
         {

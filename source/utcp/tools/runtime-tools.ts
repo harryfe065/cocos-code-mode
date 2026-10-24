@@ -5,6 +5,7 @@ import { executeGameViewOperation, executeGameViewSceneTransition, setGameViewTi
 import { RuntimePreviewResult, RuntimeSessionTools } from './runtime-session-tools';
 import { observeRuntimeNode } from '../../runtime-node-observe';
 import { unitQuaternion, orientationMatches } from '../utils/node-orientation';
+import { mutateRuntimePersistentRoot, PersistentRootOperation } from '../../runtime-persistent-root';
 
 const sessions = new RuntimeSessionTools();
 type PreviewArgs = Parameters<RuntimeSessionTools['previewControl']>[0];
@@ -260,6 +261,7 @@ export class RuntimeTools {
         'POST',
         ['runtime', 'scene', 'preload', 'progress', 'read-only'],
     )
+
     async runtimeScenePreload(args: { sessionId: string; sceneName: string; timeoutMs?: number; maxProgressSamples?: number }): Promise<Record<string, unknown>> {
         const timeoutMs = args?.timeoutMs ?? 5000;
         const maxProgressSamples = args?.maxProgressSamples ?? 32;
@@ -290,6 +292,59 @@ export class RuntimeTools {
         return { success: true, sessionId: session.sessionId, targetId: session.targetId, sceneName: args.sceneName, sceneUnchanged: true, preloaded: true, progress: samples, progressTruncated: samples.length >= maxProgressSamples, writes: false };
     }
 
+    @utcpTool('runtimePersistentRoot', 'Add or remove one exact scene-root child from Creator director persistent roots through the attached Game View. The mutation is bounded and must be proven across a separate two-scene transition witness.', {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+            sessionId: { type: 'string', minLength: 1, maxLength: 64 },
+            operation: { type: 'string', enum: ['add', 'remove'] },
+            nodeReference: { type: 'object', additionalProperties: false, properties: { id: { type: 'string', minLength: 1, maxLength: 256 } }, required: ['id'] },
+            timeoutMs: { type: 'integer', minimum: 500, maximum: 5000 },
+        },
+        required: ['sessionId', 'operation', 'nodeReference'],
+    }, {
+        type: 'object',
+        properties: {
+            success: { type: 'boolean', const: true },
+            sessionId: { type: 'string' },
+            targetId: { type: 'string' },
+            nodeUuid: { type: 'string' },
+            operation: { type: 'string', enum: ['add', 'remove'] },
+            sceneUuid: { type: 'string' },
+            parentUuidBefore: { type: ['string', 'null'] },
+            parentUuidAfter: { type: ['string', 'null'] },
+            registered: { type: 'boolean' },
+            removed: { type: 'boolean' },
+            writes: { type: 'boolean', const: true },
+        },
+        required: ['success', 'sessionId', 'targetId', 'nodeUuid', 'operation', 'sceneUuid', 'parentUuidBefore', 'parentUuidAfter', 'registered', 'removed', 'writes'],
+    }, 'POST', ['runtime', 'persistent-root', 'scene', 'mutation'])
+    async runtimePersistentRoot(args: { sessionId: string; operation: PersistentRootOperation; nodeReference: { id: string }; timeoutMs?: number }): Promise<Record<string, unknown>> {
+        const timeoutMs = args?.timeoutMs ?? 3000;
+        if (!args || typeof args.sessionId !== 'string' || !args.sessionId.trim() || args.sessionId.length > 64
+            || !['add', 'remove'].includes(args.operation) || typeof args.nodeReference?.id !== 'string' || !args.nodeReference.id.trim() || args.nodeReference.id.length > 256
+            || !Number.isInteger(timeoutMs) || timeoutMs < 500 || timeoutMs > 5000) {
+            throw new ToolError({ code: 'INVALID_ARGUMENT', status: 400, message: 'runtimePersistentRoot requires a bounded session, add/remove operation, root-child node and timeout.' });
+        }
+        const inspected = await sessions.runtimeSessionLifecycle({ operation: 'inspect', sessionId: args.sessionId, timeoutMs });
+        const session = inspected.session;
+        if (!inspected.ready || !session || !('status' in session) || session.status !== 'attached' || session.targetKind !== 'game-view' || session.sessionId !== args.sessionId || typeof session.targetId !== 'string') {
+            throw new ToolError({ code: 'RUNTIME_NOT_READY', status: 409, message: 'An attached Game View session is required for persistent-root mutation.' });
+        }
+        const expiresAt = Date.now() + timeoutMs;
+        const source = `(${mutateRuntimePersistentRoot.toString()})(${JSON.stringify(args.nodeReference.id)}, ${JSON.stringify(args.operation)}, ${expiresAt})`;
+        const result = await executeGameViewOperation(session.targetId, source, timeoutMs, true) as ReturnType<typeof mutateRuntimePersistentRoot>;
+        if (!result || typeof result !== 'object' || Array.isArray(result)) throw new ToolError({ code: 'INVALID_RUNTIME_RESPONSE', status: 502, message: 'Persistent-root mutation returned no bounded result.' });
+        if ('code' in result) throw new ToolError({ code: result.code, status: ['NODE_NOT_FOUND', 'INVALID_PERSISTENT_ROOT_TARGET'].includes(result.code) ? 404 : 409, message: result.message });
+        if (result.nodeUuid !== args.nodeReference.id || result.operation !== args.operation || typeof result.sceneUuid !== 'string' || typeof result.registered !== 'boolean' || typeof result.removed !== 'boolean') {
+            throw new ToolError({ code: 'INVALID_RUNTIME_RESPONSE', status: 502, message: 'Persistent-root mutation returned invalid identity or lifecycle state.' });
+        }
+        const after = await sessions.runtimeSessionLifecycle({ operation: 'inspect', sessionId: args.sessionId, timeoutMs: Math.max(500, expiresAt - Date.now()) });
+        if (!after.ready || !after.session || !('status' in after.session) || after.session.status !== 'attached' || after.session.sessionId !== session.sessionId || after.session.targetId !== session.targetId || after.session.createdAt !== session.createdAt) {
+            throw new ToolError({ code: 'RUNTIME_TARGET_CHANGED', status: 409, message: 'Game View session changed during persistent-root mutation.' });
+        }
+        return { success: true, sessionId: session.sessionId, targetId: session.targetId, ...result, writes: true };
+    }
     @utcpTool(
         'runtimeSceneTransition',
         'Load one exact named scene in the attached Creator 3.7.3 Game View, verify the new runtime scene identity, and invalidate the old session handle. Attach a new session before further node/component operations.',

@@ -1,6 +1,7 @@
 # Changelog
 
 ## Unreleased — Creator 3.7 follow-through
+- Add catalog-only `editorQuery` `list_unresolved`: aggregate validated top-level unresolved diagnostic kinds across bounded installed or approved external catalog scopes, deduplicating kinds per source record while retaining occurrence counts. Missing metadata and malformed diagnostics fail closed; results never imply runtime qualification or dispatch permission.
 
 - Require a final exact-camera observation of every attempted original field before reporting restoration success; per-field readbacks alone no longer hide later setter side effects. No corrective write retries. Implemented-needs-verification.
 - Preserve camera pre-dispatch failures without falsely reporting restoration, and retain exact property/snapshot phase in unknown native outcomes. Source implemented; verification deferred.

@@ -233,12 +233,63 @@ test('static discovery groups explicit metadata, omits unknown values, and never
   assert.equal(result.live.checked, false);
   assert.deepEqual(calls, { editor: 0, inspector: 0 });
 });
+test('unresolved discovery aggregates diagnostic kinds and deduplicates per source record', async t => {
+  const first = { ...engineRecord(), unresolved: [{ kind: 'any' }, { kind: 'any' }, { kind: 'unknown' }] };
+  const second = { ...engineRecord(), id: '3.7.3:engine-runtime:cc:Button:run:method:instance', member: 'run', name: 'run', unresolved: [{ kind: 'any' }] };
+  const third = { ...engineRecord(), id: '3.7.3:engine-runtime:cc:Button:paint:method:instance', member: 'paint', name: 'paint', unresolved: [] };
+  const calls = catalog(t, [first, second, third]);
+  const result = await discoverEngineApi({ operation: 'list_unresolved', namespace: 'engine-runtime' });
+  assert.deepEqual(result.records.map(row => [row.name, row.unresolvedKind, row.recordCount, row.occurrenceCount, row.kind, row.permitted]), [
+    ['any', 'any', 2, 3, 'unresolved-summary', false],
+    ['unknown', 'unknown', 1, 1, 'unresolved-summary', false],
+  ]);
+  assert.equal(result.live.checked, false);
+  assert.equal(result.runtimeVerified, false);
+  assert.equal(result.qualified, false);
+  assert.equal(result.permitted, false);
+  assert.equal(result.mutationAuthorized, false);
+  assert.deepEqual(calls, { editor: 0, inspector: 0 });
+});
+
+test('unresolved discovery accepts explicit empty metadata and fails closed for missing or malformed metadata', async t => {
+  const valid = { ...engineRecord(), unresolved: [] };
+  catalog(t, valid);
+  const empty = await discoverEngineApi({ operation: 'list_unresolved' });
+  assert.deepEqual(empty.records, []);
+  for (const unresolved of [undefined, null, [{}], [{ kind: '' }], [{ kind: 42 }], [null], ['any']]) {
+    await t.test(unresolved === undefined ? 'missing' : JSON.stringify(unresolved), async child => {
+      const record = { ...engineRecord() };
+      if (unresolved !== undefined) record.unresolved = unresolved;
+      catalog(child, record);
+      await assert.rejects(() => discoverEngineApi({ operation: 'list_unresolved' }), error => error.code === (unresolved === undefined ? 'CATALOG_INDEX_UPGRADE_REQUIRED' : 'CATALOG_INVALID'));
+    });
+  }
+});
+
+test('unresolved discovery preserves pagination bounds and rejects stale cursors without native dispatch', async t => {
+  const records = [
+    { ...engineRecord(), unresolved: [{ kind: 'any' }] },
+    { ...engineRecord(), id: '3.7.3:engine-runtime:cc:Button:run:method:instance', member: 'run', name: 'run', unresolved: [{ kind: 'unknown' }] },
+  ];
+  const calls = catalog(t, records);
+  const page = await discoverEngineApi({ operation: 'list_unresolved', maxEntries: 1 });
+  assert.equal(page.count, 1);
+  assert.equal(page.truncated, true);
+  assert.ok(page.nextCursor);
+  const next = await discoverEngineApi({ operation: 'list_unresolved', maxEntries: 1, cursor: page.nextCursor });
+  assert.equal(next.count, 1);
+  assert.equal(next.truncated, false);
+  await assert.rejects(() => discoverEngineApi({ operation: 'list_unresolved', namespace: 'editor-ipc', cursor: page.nextCursor }), error => error.code === 'STALE_CURSOR');
+  await assert.rejects(() => discoverEngineApi({ operation: 'list_unresolved', maxBytes: 256 }), error => error.code === 'RESULT_TOO_LARGE');
+  assert.deepEqual(calls, { editor: 0, inspector: 0 });
+});
+
 
 
 test('navigation refuses instance references instead of mapping them through Inspector', async t => {
   const record = engineRecord(), calls = catalog(t, record);
   const targets = [
-    { operation: 'list_domains' }, { operation: 'list_classes' }, { operation: 'list_namespaces' }, { operation: 'list_modules' }, { operation: 'list_kinds' }, { operation: 'list_visibility' }, { operation: 'list_contexts' }, { operation: 'list_evidence' }, { operation: 'list_static' },
+    { operation: 'list_domains' }, { operation: 'list_classes' }, { operation: 'list_namespaces' }, { operation: 'list_modules' }, { operation: 'list_kinds' }, { operation: 'list_visibility' }, { operation: 'list_contexts' }, { operation: 'list_evidence' }, { operation: 'list_static' }, { operation: 'list_unresolved' },
     { operation: 'list_members', className: 'Button' },
     { operation: 'get_related_types', recordId: record.id }
   ];

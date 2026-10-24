@@ -10,7 +10,7 @@ import { openExternalApiCatalog, readBounded, parseCatalogJson } from './externa
 
 export interface EngineDiscoveryArgs {
     category?: string; className?: string; targetVersion?: string; domain?: string;
-    operation?: 'records' | 'list_domains' | 'list_classes' | 'list_namespaces' | 'list_modules' | 'list_kinds' | 'list_visibility' | 'list_contexts' | 'list_evidence' | 'list_static' | 'list_members' | 'get_signature' | 'get_related_types' | 'get_inheritance' | 'lookup_editor_message' | 'explain_bridge_route' | 'compare_version';
+    operation?: 'records' | 'list_domains' | 'list_classes' | 'list_namespaces' | 'list_modules' | 'list_kinds' | 'list_visibility' | 'list_contexts' | 'list_evidence' | 'list_static' | 'list_unresolved' | 'list_members' | 'get_signature' | 'get_related_types' | 'get_inheritance' | 'lookup_editor_message' | 'explain_bridge_route' | 'compare_version';
     namespace?: 'engine-runtime' | 'engine-authoring' | 'editor-ipc' | 'bridge';
     kind?: string; module?: string; visibility?: 'public' | 'protected' | 'private' | 'internal';
     context?: string; evidenceState?: string;
@@ -170,7 +170,8 @@ async function discoverWithinDeadline(args: EngineDiscoveryArgs, deadline: numbe
         checkDeadline();
         return output;
     }
-    if (!['records', 'list_domains', 'list_classes', 'list_namespaces', 'list_modules', 'list_kinds', 'list_visibility', 'list_contexts', 'list_evidence', 'list_static', 'list_members', 'get_signature', 'get_related_types', 'get_inheritance', 'compare_version'].includes(operation)) throw new ToolError({ code: 'INVALID_ARGUMENT', status: 400, message: 'Unknown catalog discovery operation.' });
+    if (!['records', 'list_domains', 'list_classes', 'list_namespaces', 'list_modules', 'list_kinds', 'list_visibility', 'list_contexts', 'list_evidence', 'list_static', 'list_unresolved', 'list_members', 'get_signature', 'get_related_types', 'get_inheritance', 'compare_version'].includes(operation)) throw new ToolError({ code: 'INVALID_ARGUMENT', status: 400, message: 'Unknown catalog discovery operation.' });
+    if (operation === 'list_unresolved' && args.reference !== undefined) throw new ToolError({ code: 'INVALID_ARGUMENT', status: 400, message: 'Catalog unresolved diagnostics do not accept an instance reference.' });
     if (operation === 'get_related_types' && (typeof args.recordId !== 'string' || !args.recordId || args.recordId.length > 1024)) throw new ToolError({ code: 'INVALID_ARGUMENT', status: 400, message: 'get_related_types requires a bounded exact recordId.' });
     if (operation === 'get_inheritance' && (typeof args.recordId !== 'string' || !args.recordId || args.recordId.length > 1024)) throw new ToolError({ code: 'INVALID_ARGUMENT', status: 400, message: 'get_inheritance requires a bounded exact recordId.' });
     if (operation === 'compare_version') {
@@ -437,6 +438,47 @@ async function discoverWithinDeadline(args: EngineDiscoveryArgs, deadline: numbe
             else staticStates.set(key, { id: `${version}:static-index:${key}`, namespace: record.namespace, static: staticIdentity, kind: 'static-summary', recordCount: 1, permitted: false });
         }
         records.splice(0, records.length, ...[...staticStates.values()].sort((a, b) => a.id.localeCompare(b.id)));
+    } else if (operation === 'list_unresolved') {
+        const unresolved = new Map<string, ApiRecord>();
+        for (const record of records) {
+            checkDeadline();
+            const source = external
+                ? ApiRecordSchema.parse({ ...readPage(() => external.readRecord(record.id)), permitted: false })
+                : record;
+            if (!Object.prototype.hasOwnProperty.call(source, 'unresolved')) {
+                throw new ToolError({ code: 'CATALOG_INDEX_UPGRADE_REQUIRED', status: 409, message: 'Regenerate and explicitly adopt a catalog containing unresolved diagnostics metadata.' });
+            }
+            const diagnostics = source.unresolved;
+            if (!Array.isArray(diagnostics) || diagnostics.length > 10000) {
+                throw new ToolError({ code: 'CATALOG_INVALID', status: 502, message: 'Record unresolved diagnostics metadata is malformed or exceeds 10000 entries.' });
+            }
+            const kinds = new Set<string>();
+            for (const diagnostic of diagnostics) {
+                checkDeadline();
+                if (!diagnostic || typeof diagnostic !== 'object' || Array.isArray(diagnostic)) {
+                    throw new ToolError({ code: 'CATALOG_INVALID', status: 502, message: 'Record unresolved diagnostics metadata contains a malformed entry.' });
+                }
+                const unresolvedKind = (diagnostic as Record<string, unknown>).kind;
+                if (typeof unresolvedKind !== 'string' || !unresolvedKind.trim() || unresolvedKind.length > 128) {
+                    throw new ToolError({ code: 'CATALOG_INVALID', status: 502, message: 'Record unresolved diagnostics metadata requires a bounded nonblank kind.' });
+                }
+                const key = JSON.stringify([source.namespace, unresolvedKind]);
+                let summary = unresolved.get(key);
+                if (!summary) {
+                    summary = {
+                        id: `${version}:unresolved-index:${key}`, namespace: source.namespace, name: unresolvedKind,
+                        unresolvedKind, kind: 'unresolved-summary', recordCount: 0, occurrenceCount: 0, permitted: false,
+                    };
+                    unresolved.set(key, summary);
+                }
+                summary.occurrenceCount = Number(summary.occurrenceCount) + 1;
+                if (!kinds.has(unresolvedKind)) {
+                    kinds.add(unresolvedKind);
+                    summary.recordCount = Number(summary.recordCount) + 1;
+                }
+            }
+        }
+        records.splice(0, records.length, ...[...unresolved.values()].sort((a, b) => a.id.localeCompare(b.id)));
     } else if (operation === 'get_related_types') {
         if (!records[0]) throw new ToolError({ code: 'TARGET_NOT_FOUND', status: 404, message: 'Record is absent from the selected catalog scope.' });
         const source = external ? ApiRecordSchema.parse({ ...readPage(() => external.readRecord(records[0].id)), permitted: false }) : records[0];
@@ -644,7 +686,7 @@ async function discoverWithinDeadline(args: EngineDiscoveryArgs, deadline: numbe
         truncated: offset + selected.length < records.length,
         truncationReason: offset + selected.length < records.length ? byteLimited ? 'maxBytes' : 'maxEntries' : null,
         nextCursor: cursorAt(offset + selected.length), live,
-        ...(operation === 'get_inheritance' ? { permitted: false, mutationAuthorized: false } : {}),
+        ...(operation === 'get_inheritance' || operation === 'list_unresolved' ? { permitted: false, mutationAuthorized: false } : {}),
         runtimeVerified: false, qualified: false,
     });
     for (const record of records.slice(offset, offset + maxEntries)) {
